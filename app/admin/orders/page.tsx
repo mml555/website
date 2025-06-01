@@ -38,20 +38,24 @@ export default function AdminOrdersPage() {
     setError(null);
     fetch('/api/admin/orders')
       .then(async (res) => {
+        const data = await res.json();
+        console.log('[AdminOrdersPage] API response:', data);
         if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error || 'Failed to fetch orders');
+          if (res.status === 401) {
+            setError('You are not authorized to view orders.');
+          } else {
+            setError(data.error || 'Failed to fetch orders');
+          }
+          setOrders([]);
+        } else {
+          setOrders(Array.isArray(data) ? data : []);
         }
-        return res.json();
-      })
-      .then((data) => {
-        setOrders(data);
-        setLoading(false);
       })
       .catch((err) => {
         setError(err.message || 'Failed to fetch orders');
-        setLoading(false);
-      });
+        setOrders([]);
+      })
+      .finally(() => setLoading(false));
   }
 
   useEffect(() => {

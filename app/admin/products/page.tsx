@@ -84,7 +84,7 @@ export default function AdminProductsPage() {
       })
       .then((data) => {
         setProducts(data.products);
-        setTotal(data.totalItems);
+        setTotal(data.totalItems ?? data.total ?? 0);
         setLoading(false);
       })
       .catch((err) => {
@@ -245,6 +245,34 @@ export default function AdminProductsPage() {
       setJumpPage('');
     }
   };
+
+  useEffect(() => {
+    async function fetchProducts() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch('/api/admin/products');
+        const data = await res.json();
+        console.log('[AdminProductsPage] API response:', data);
+        if (!res.ok) {
+          if (res.status === 401) {
+            setError('You are not authorized to view products.');
+          } else {
+            setError(data.error || 'Failed to fetch products');
+          }
+          setProducts([]);
+        } else {
+          setProducts(Array.isArray(data) ? data : []);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch products');
+        setProducts([]);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchProducts();
+  }, []);
 
   return (
     <div>

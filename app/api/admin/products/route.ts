@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
   }));
   console.log('[ADMIN_PRODUCTS_API] page:', page, 'limit:', limit, 'search:', search, 'status:', status);
   console.log('[ADMIN_PRODUCTS_API] products.length:', productsWithNumberFields.length, 'total:', total);
-  return NextResponse.json({ products: productsWithNumberFields, total });
+  return NextResponse.json({ products: productsWithNumberFields, totalItems: total });
 }
 
 export async function POST(req: Request) {
