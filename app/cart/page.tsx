@@ -13,7 +13,7 @@ import { TrashIcon } from "@heroicons/react/24/outline"
 export const dynamic = 'force-dynamic'
 
 export default function CartPage() {
-  const { items, updateQuantity, removeItem, isLoading, error, total: cartTotal } = useCart()
+  const { items, updateQuantity, removeItem, isLoading, error, total: cartTotal, cartExpiryWarning } = useCart()
   const safeItems = Array.isArray(items) ? items : [];
   const [isUpdating, setIsUpdating] = useState<{ [key: string]: boolean }>({})
   const router = useRouter()
@@ -106,6 +106,14 @@ export default function CartPage() {
   return (
     <div className="min-h-screen bg-white py-12">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        {cartExpiryWarning && (
+          <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-4" role="alert">
+            <div className="flex items-center">
+              <svg className="h-5 w-5 text-yellow-500 mr-2" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12A9 9 0 113 12a9 9 0 0118 0z" /></svg>
+              <span>{cartExpiryWarning}</span>
+            </div>
+          </div>
+        )}
         <div className="lg:grid lg:grid-cols-12 lg:gap-x-12 lg:items-start">
           <div className="lg:col-span-7">
             <h1 className="text-3xl font-extrabold tracking-tight text-gray-900 sm:text-4xl">

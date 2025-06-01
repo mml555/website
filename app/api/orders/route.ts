@@ -523,7 +523,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Validate stock for each item
+    // --- Final stock and variant check before order creation ---
     for (const item of data.items) {
       // Check product stock
       const product = await prisma.product.findUnique({
@@ -539,7 +539,13 @@ export async function POST(request: Request) {
       if (item.variantId) {
         // Check variant stock
         const variant = product.variants.find((v: any) => v.id === item.variantId);
-        if (!variant || variant.stock < item.quantity) {
+        if (!variant) {
+          return NextResponse.json(
+            { message: `Sorry, the selected variant for "${product.name}" is no longer available. Please update your cart.`, code: 'VARIANT_NOT_FOUND', productId: item.productId, variantId: item.variantId },
+            { status: 400, headers: getResponseHeaders() }
+          );
+        }
+        if (variant.stock < item.quantity) {
           return NextResponse.json(
             { message: `Sorry, there is not enough stock for "${product.name}" (selected variant). Please adjust your cart.`, code: 'OUT_OF_STOCK', productId: item.productId, variantId: item.variantId },
             { status: 400, headers: getResponseHeaders() }

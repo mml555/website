@@ -44,6 +44,7 @@ export interface CartContextType {
     isLoading: boolean;
     retrySync: () => Promise<void>;
     pendingChanges: CartItem[];
+    cartExpiryWarning: string | null;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -132,6 +133,27 @@ export function CartProvider({ children }: CartProviderProps) {
     const userInitiatedRef = useRef(false);
     // Add a ref to track the last sync time
     const lastSyncTimeRef = useRef<number>(0);
+    // Guest cart expiry warning
+    const [cartExpiryWarning, setCartExpiryWarning] = useState<string | null>(null);
+
+    // --- Mutation queue for atomic cart updates ---
+    const mutationQueue = useRef<(() => Promise<void>)[]>([]);
+    const isMutating = useRef(false);
+    const runNextMutation = useCallback(() => {
+        if (isMutating.current || mutationQueue.current.length === 0) return;
+        isMutating.current = true;
+        const next = mutationQueue.current.shift();
+        if (next) {
+            next().finally(() => {
+                isMutating.current = false;
+                runNextMutation();
+            });
+        }
+    }, []);
+    function enqueueMutation(fn: () => Promise<void>) {
+        mutationQueue.current.push(fn);
+        runNextMutation();
+    }
 
     // Keep itemsRef in sync with items state
     useEffect(() => {
@@ -510,6 +532,44 @@ export function CartProvider({ children }: CartProviderProps) {
         }
     }, [items, pendingChanges, rateLimitCooldown, debouncedSyncCart, persistCartState, session?.user, syncCart]);
 
+    // --- Wrap cart mutations ---
+    const atomicAddItem = useCallback(async (item: CartItemInput, quantity: number = 1) => {
+        return new Promise<void>((resolve, reject) => {
+            enqueueMutation(async () => {
+                try {
+                    await addItem(item, quantity);
+                    resolve();
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+    }, [addItem]);
+    const atomicUpdateQuantity = useCallback(async (id: string, quantity: number, variantId?: string) => {
+        return new Promise<void>((resolve, reject) => {
+            enqueueMutation(async () => {
+                try {
+                    await updateQuantity(id, quantity, variantId);
+                    resolve();
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+    }, [updateQuantity]);
+    const atomicRemoveItem = useCallback(async (id: string, variantId?: string) => {
+        return new Promise<void>((resolve, reject) => {
+            enqueueMutation(async () => {
+                try {
+                    await removeItem(id, variantId);
+                    resolve();
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+    }, [removeItem]);
+
     // Helper to clear cart state and localStorage
     const clearCartAndStorage = useCallback(() => {
         setItems([]);
@@ -544,12 +604,50 @@ export function CartProvider({ children }: CartProviderProps) {
         }
     }, [pendingChanges, syncCart]);
 
+    // Guest cart expiry warning
+    useEffect(() => {
+        if (!isClient || status !== 'unauthenticated') return;
+        // Guest cart TTL is 5 minutes (300000 ms)
+        const cartStateRaw = typeof window !== 'undefined' ? localStorage.getItem('cartState') : null;
+        let lastSynced: number | null = null;
+        if (cartStateRaw) {
+            try {
+                const cartState = JSON.parse(cartStateRaw);
+                if (cartState && cartState.lastSynced) {
+                    lastSynced = new Date(cartState.lastSynced).getTime();
+                }
+            } catch {}
+        }
+        if (lastSynced) {
+            const now = Date.now();
+            const msLeft = 300000 - (now - lastSynced);
+            if (msLeft < 60000 && msLeft > 0) {
+                setCartExpiryWarning(`Your cart will expire in ${Math.ceil(msLeft / 1000)} seconds. Please complete checkout or refresh your cart.`);
+            } else {
+                setCartExpiryWarning(null);
+            }
+        } else {
+            setCartExpiryWarning(null);
+        }
+        const interval = setInterval(() => {
+            if (!lastSynced) return;
+            const now = Date.now();
+            const msLeft = 300000 - (now - lastSynced);
+            if (msLeft < 60000 && msLeft > 0) {
+                setCartExpiryWarning(`Your cart will expire in ${Math.ceil(msLeft / 1000)} seconds. Please complete checkout or refresh your cart.`);
+            } else {
+                setCartExpiryWarning(null);
+            }
+        }, 10000);
+        return () => clearInterval(interval);
+    }, [isClient, status]);
+
     const value = useMemo(
         () => ({
             items,
-            addItem,
-            removeItem,
-            updateQuantity,
+            addItem: atomicAddItem,
+            removeItem: atomicRemoveItem,
+            updateQuantity: atomicUpdateQuantity,
             clearCart,
             total,
             itemCount,
@@ -557,9 +655,10 @@ export function CartProvider({ children }: CartProviderProps) {
             clearError,
             isLoading,
             retrySync,
-            pendingChanges
+            pendingChanges,
+            cartExpiryWarning
         }),
-        [items, addItem, removeItem, updateQuantity, clearCart, total, itemCount, error, clearError, isLoading, retrySync, pendingChanges]
+        [items, atomicAddItem, atomicRemoveItem, atomicUpdateQuantity, clearCart, total, itemCount, error, clearError, isLoading, retrySync, pendingChanges, cartExpiryWarning]
     );
 
     // On login, merge guest and server cart, sync merged cart (only on transition)
