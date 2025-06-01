@@ -124,11 +124,48 @@ export async function POST(request: Request) {
       )
     }
 
+    // --- Server-side stock and variant validation ---
+    const errors: any[] = [];
+    const validItems = [];
+    for (const item of items) {
+      const product = existingProducts.find((p: any) => p.id === item.id);
+      if (!product) {
+        errors.push({ id: item.id, error: 'Product not found' });
+        continue;
+      }
+      let stock = product.stock;
+      let variant = null;
+      if (item.variantId) {
+        variant = product.variants.find((v: any) => v.id === item.variantId);
+        if (!variant) {
+          errors.push({ id: item.id, variantId: item.variantId, error: 'Variant not found' });
+          continue;
+        }
+        stock = variant.stock;
+      }
+      if (typeof item.quantity !== 'number' || item.quantity < 1) {
+        errors.push({ id: item.id, variantId: item.variantId, error: 'Quantity must be at least 1' });
+        continue;
+      }
+      if (typeof stock !== 'number' || item.quantity > stock) {
+        errors.push({ id: item.id, variantId: item.variantId, error: `Only ${stock} items available in stock` });
+        continue;
+      }
+      validItems.push(item);
+    }
+    if (errors.length > 0) {
+      return NextResponse.json({
+        success: false,
+        error: 'Some cart items are invalid',
+        details: errors
+      }, { status: 400 });
+    }
+
     // For guests, store in Redis only
     if (isGuest && guestId) {
       // Transform items as for authenticated users (fetch product info)
       const productsById = Object.fromEntries(existingProducts.map((p: any) => [p.id, p]));
-      const transformedItems = items.map((item: any) => {
+      const transformedItems = validItems.map((item: any) => {
         const product = productsById[item.id];
         const variant = item.variantId
           ? product.variants.find((v: any) => v.id === item.variantId)
@@ -175,7 +212,7 @@ export async function POST(request: Request) {
       create: {
         userId: user.id,
         items: {
-          create: items.map(item => ({
+          create: validItems.map(item => ({
             productId: item.id,
             quantity: item.quantity,
             variantId: item.variantId
@@ -185,7 +222,7 @@ export async function POST(request: Request) {
       update: {
         items: {
           deleteMany: {},
-          create: items.map(item => ({
+          create: validItems.map(item => ({
             productId: item.id,
             quantity: item.quantity,
             variantId: item.variantId

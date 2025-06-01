@@ -132,4 +132,89 @@ describe('Cart Edge Cases', () => {
     });
     expect(JSON.parse(localStorage.getItem('cart') || '[]').length).toBe(1);
   });
+
+  it('rejects zero or negative quantity on server', async () => {
+    // Simulate server response for zero quantity
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        success: false,
+        error: 'Some cart items are invalid',
+        details: [{ id: '1', error: 'Quantity must be at least 1' }]
+      })
+    });
+    render(
+      <CartProvider>
+        <TestComponent />
+      </CartProvider>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText('Add Item 1'));
+    });
+    // Try to update to zero
+    await act(async () => {
+      fireEvent.click(screen.getByText('Update To Zero'));
+    });
+    // Should show error message
+    await waitFor(() => {
+      expect(screen.getByTestId('cart-items')).toHaveTextContent('0');
+    });
+  });
+
+  it('rejects missing/deleted variant on server', async () => {
+    // Simulate server response for missing variant
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        success: false,
+        error: 'Some cart items are invalid',
+        details: [{ id: '1', variantId: 'variantX', error: 'Variant not found' }]
+      })
+    });
+    render(
+      <CartProvider>
+        <TestComponent />
+      </CartProvider>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText('Add Item 1'));
+    });
+    // Try to remove a non-existent variant
+    await act(async () => {
+      fireEvent.click(screen.getByText('Remove Not In Cart'));
+    });
+    // Should not throw, cart remains empty
+    expect(screen.getByTestId('cart-items')).toHaveTextContent('0');
+  });
+
+  it('rejects over-stock update on server', async () => {
+    // Simulate server response for over-stock
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        success: false,
+        error: 'Some cart items are invalid',
+        details: [{ id: '1', error: 'Only 2 items available in stock' }]
+      })
+    });
+    render(
+      <CartProvider>
+        <TestComponent />
+      </CartProvider>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText('Add Item 1'));
+    });
+    // Try to update to quantity above stock
+    await act(async () => {
+      fireEvent.click(screen.getByText('Update To Zero'));
+    });
+    // Should show error message
+    await waitFor(() => {
+      expect(screen.getByTestId('cart-items')).toHaveTextContent('0');
+    });
+  });
 }); 
