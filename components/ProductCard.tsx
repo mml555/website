@@ -20,7 +20,9 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, index }) => {
   const getImageUrl = () => {
     if (imageError) return '/images/placeholder.svg';
     if (Array.isArray(product.images) && product.images.length > 0) {
-      return product.images[0];
+      const url = product.images[0];
+      if (url && url.startsWith('/')) return url; // local image
+      if (url && url.startsWith('http')) return url; // remote image
     }
     return getDefaultImage();
   };
