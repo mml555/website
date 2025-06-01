@@ -84,7 +84,7 @@ export default function AdminProductsPage() {
       })
       .then((data) => {
         setProducts(data.products);
-        setTotal(data.totalItems ?? data.total ?? 0);
+        setTotal(data.totalItems ?? data.total ?? data.pagination?.totalItems ?? 0);
         setLoading(false);
       })
       .catch((err) => {

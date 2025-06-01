@@ -42,7 +42,12 @@ export async function GET(req: NextRequest) {
   }));
   console.log('[ADMIN_PRODUCTS_API] page:', page, 'limit:', limit, 'search:', search, 'status:', status);
   console.log('[ADMIN_PRODUCTS_API] products.length:', productsWithNumberFields.length, 'total:', total);
-  return NextResponse.json({ products: productsWithNumberFields, totalItems: total });
+  const pages = Math.max(1, Math.ceil(total / limit));
+  return NextResponse.json({
+    products: productsWithNumberFields,
+    totalItems: total,
+    pagination: { totalItems: total, page, limit, pages }
+  });
 }
 
 export async function POST(req: Request) {
