@@ -4,6 +4,8 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { decimalToNumber } from '@/lib/utils';
 import { z } from 'zod';
+import * as Sentry from '@sentry/nextjs'
+import redis, { withRedis } from '@/lib/redis'
 
 // Define the schema for the product response
 const productResponseSchema = z.object({
@@ -41,6 +43,18 @@ function convertPriceToNumber(price: any): number {
     if (price.amount) return price.amount;
   }
   return 0;
+}
+
+async function invalidateProductAndCategoryCache() {
+  if (!redis) return;
+  await withRedis(async (r) => {
+    const productKeys = await r.keys('products:*');
+    const categoryKeys = await r.keys('categories:*');
+    const keys = [...productKeys, ...categoryKeys];
+    if (keys.length > 0) {
+      await r.del(...keys);
+    }
+  }, undefined);
 }
 
 export async function GET(
@@ -85,6 +99,7 @@ export async function GET(
 
     return NextResponse.json(validatedProduct);
   } catch (error) {
+    Sentry.captureException(error)
     console.error('Error fetching product:', error);
     if (error instanceof z.ZodError) {
       return NextResponse.json(
@@ -175,8 +190,11 @@ export async function PATCH(
 
     const validatedProduct = productResponseSchema.parse(productWithNumberPrice);
 
+    await invalidateProductAndCategoryCache();
+
     return NextResponse.json(validatedProduct);
   } catch (error) {
+    Sentry.captureException(error)
     console.error('Error updating product:', error);
     if (error instanceof z.ZodError) {
       return NextResponse.json(
@@ -229,8 +247,11 @@ export async function DELETE(
       where: { id },
     });
 
+    await invalidateProductAndCategoryCache();
+
     return NextResponse.json({ message: 'Product deleted successfully' });
   } catch (error) {
+    Sentry.captureException(error)
     console.error('Error deleting product:', error);
     return NextResponse.json(
       { error: 'Failed to delete product' },

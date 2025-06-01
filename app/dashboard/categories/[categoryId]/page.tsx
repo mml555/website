@@ -87,6 +87,15 @@ export default function EditCategoryPage() {
 
   return (
     <div className="max-w-lg mx-auto mt-10 bg-white p-8 rounded shadow">
+      <div className="mb-4">
+        <button
+          type="button"
+          onClick={() => router.push('/dashboard/categories')}
+          className="inline-flex items-center px-3 py-1 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+        >
+          ← Back to Categories
+        </button>
+      </div>
       <h1 className="text-2xl font-bold mb-6">Edit Category</h1>
       <form onSubmit={handleSubmit} className="space-y-6">
         <div>

@@ -46,9 +46,13 @@ export default function EditProductPage() {
   const [categories, setCategories] = useState<Array<{ id: string; name: string }>>([])
 
   useEffect(() => {
+    if (productId === 'new') {
+      router.replace('/dashboard/products/new');
+      return;
+    }
     const fetchProduct = async () => {
       try {
-        const response = await fetch(`/api/products/${productId}`)
+        const response = await fetch(`/api/admin/products/${productId}`)
         if (!response.ok) {
           if (response.status === 404) {
             throw new Error("Product not found")
@@ -102,7 +106,7 @@ export default function EditProductPage() {
         price: parseFloat(formData.price)
       })
 
-      const response = await fetch(`/api/products/${productId}`, {
+      const response = await fetch(`/api/admin/products/${productId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(validatedData),
@@ -281,7 +285,7 @@ export default function EditProductPage() {
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
               >
                 <option value="">Select a category</option>
-                {categories.map((category) => (
+                {(Array.isArray(categories) ? categories : []).map((category) => (
                   <option key={category.id} value={category.id}>
                     {category.name}
                   </option>

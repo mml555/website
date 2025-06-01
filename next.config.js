@@ -62,6 +62,7 @@ const nextConfig = {
     minimumCacheTTL: 60,
     dangerouslyAllowSVG: true,
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
+    domains: ['via.placeholder.com', 'picsum.photos'],
   },
   // Server external packages (moved from experimental)
   serverExternalPackages: ['@prisma/client', 'bcryptjs'],

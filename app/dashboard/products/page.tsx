@@ -31,6 +31,7 @@ interface ProductsResponse {
   totalPages: number
   currentPage: number
   totalItems: number
+  total?: number
 }
 
 export default function ProductsPage() {
@@ -41,7 +42,7 @@ export default function ProductsPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [totalItems, setTotalItems] = useState(0)
-  const pageSize = 10
+  const [limit, setLimit] = useState(25)
   const [duplicateNames, setDuplicateNames] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState("")
   const [category, setCategory] = useState("")
@@ -69,7 +70,7 @@ export default function ProductsPage() {
         const safePage = Number.isFinite(currentPage) && currentPage > 0 ? currentPage : 1
         const params = new URLSearchParams({
           page: safePage.toString(),
-          limit: pageSize.toString(),
+          limit: limit.toString(),
           ...(search && { search }),
           ...(category && { category }),
           ...(sortBy && { sortBy }),
@@ -79,6 +80,7 @@ export default function ProductsPage() {
           throw new Error("Failed to fetch products")
         }
         const data: ProductsResponse = await response.json()
+        console.log('Fetched products response:', data)
         // Deduplicate by name, keep the product with the lowest price
         const nameMap = new Map<string, Product>()
         const duplicateNames = new Set<string>()
@@ -93,10 +95,15 @@ export default function ProductsPage() {
           }
         }
         const uniqueProducts = Array.from(nameMap.values())
+        console.log('Unique products:', uniqueProducts)
         setProducts(uniqueProducts)
         setTotalPages(Number.isFinite(data.totalPages) && data.totalPages > 0 ? data.totalPages : 1)
         setCurrentPage(Number.isFinite(data.currentPage) && data.currentPage > 0 ? data.currentPage : 1)
-        setTotalItems(Number.isFinite(data.totalItems) && data.totalItems >= 0 ? data.totalItems : 0)
+        setTotalItems(
+          data && typeof data === 'object' && Array.isArray(data.products) && Number.isFinite(data.totalItems) && data.totalItems >= 0
+            ? data.totalItems
+            : 0
+        )
         setDuplicateNames(duplicateNames)
       } catch (err) {
         setError(err instanceof Error ? err.message : "An error occurred")
@@ -105,7 +112,7 @@ export default function ProductsPage() {
       }
     }
     fetchProducts()
-  }, [currentPage, search, category, sortBy])
+  }, [currentPage, search, category, sortBy, limit])
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -121,6 +128,11 @@ export default function ProductsPage() {
     setSortBy(e.target.value)
     setCurrentPage(1)
   }
+
+  const handleLimitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setLimit(Number(e.target.value));
+    setCurrentPage(1);
+  };
 
   if (loading) {
     return (
@@ -253,7 +265,7 @@ export default function ProductsPage() {
                         <div className="flex items-center">
                           <div className="h-10 w-10 flex-shrink-0">
                             <Image
-                              src={product.images[0]}
+                              src={product.images && product.images[0] ? product.images[0] : 'https://via.placeholder.com/40'}
                               alt={product.name}
                               width={40}
                               height={40}
@@ -274,7 +286,7 @@ export default function ProductsPage() {
                         </div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                        {product.category.name}
+                        {product.category && product.category.name ? product.category.name : 'Uncategorized'}
                       </td>
                       <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                         ${product.price.toFixed(2)}
@@ -316,12 +328,12 @@ export default function ProductsPage() {
         <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
           <div>
             <p className="text-sm text-gray-700">
-              Showing <span className="font-medium">{!isNaN((currentPage - 1) * pageSize + 1) ? (currentPage - 1) * pageSize + 1 : ''}</span> to{" "}
-              <span className="font-medium">{!isNaN(Math.min(currentPage * pageSize, totalItems)) ? Math.min(currentPage * pageSize, totalItems) : ''}</span>{" "}
+              Showing <span className="font-medium">{!isNaN((currentPage - 1) * limit + 1) ? (currentPage - 1) * limit + 1 : ''}</span> to{" "}
+              <span className="font-medium">{!isNaN(Math.min(currentPage * limit, totalItems)) ? Math.min(currentPage * limit, totalItems) : ''}</span>{" "}
               of <span className="font-medium">{!isNaN(totalItems) ? totalItems : ''}</span> results
             </p>
           </div>
-          <div>
+          <div className="flex items-center gap-2">
             <nav className="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
               <button
                 onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
@@ -357,6 +369,15 @@ export default function ProductsPage() {
                 </svg>
               </button>
             </nav>
+            <select
+              className="ml-2 border rounded px-2 py-1"
+              value={limit}
+              onChange={handleLimitChange}
+            >
+              {[10, 25, 50, 100].map(opt => (
+                <option key={opt} value={opt}>{opt} / page</option>
+              ))}
+            </select>
           </div>
         </div>
       </div>

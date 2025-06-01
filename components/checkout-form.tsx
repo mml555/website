@@ -13,9 +13,11 @@ interface CheckoutFormProps {
   orderId?: string | null;
   clientSecret?: string;
   items?: any[];
+  onPaying?: (paying: boolean) => void;
+  onSuccess?: () => void;
 }
 
-export default function CheckoutForm({ orderId }: CheckoutFormProps) {
+export default function CheckoutForm({ orderId, onPaying, onSuccess }: CheckoutFormProps) {
   const stripe = useStripe();
   const elements = useElements();
   const [loading, setLoading] = useState(false);
@@ -27,30 +29,35 @@ export default function CheckoutForm({ orderId }: CheckoutFormProps) {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    if (onPaying) onPaying(true);
     if (!stripe || !elements) {
       setError('Stripe has not loaded yet.');
       setLoading(false);
+      if (onPaying) onPaying(false);
       return;
     }
     try {
       const result = await stripe.confirmPayment({
         elements,
-        confirmParams: {
-          // Do not use return_url, handle redirect manually
-        },
+        confirmParams: {},
         redirect: 'if_required',
       });
       if (!result || typeof result !== 'object') {
         setError('Unexpected error: No response from payment processor.');
         setLoading(false);
+        if (onPaying) onPaying(false);
         return;
       }
       if (result.error) {
         setError(result.error.message || 'Payment failed.');
       } else if (result.paymentIntent) {
         setRedirecting(true);
-        // Redirect to confirmation page with payment_intent
-        router.push(`/order-confirmation?payment_intent=${result.paymentIntent.id}`);
+        if (onSuccess) onSuccess();
+        if (orderId) {
+          router.push(`/order-confirmation/${orderId}`);
+        } else {
+          router.push(`/order-confirmation?payment_intent=${result.paymentIntent.id}`);
+        }
         return;
       } else {
         setError('Payment succeeded but no payment intent returned.');
@@ -59,6 +66,7 @@ export default function CheckoutForm({ orderId }: CheckoutFormProps) {
       setError(err?.message || 'An error occurred during payment.');
     }
     setLoading(false);
+    if (onPaying) onPaying(false);
   };
 
   if (redirecting) {

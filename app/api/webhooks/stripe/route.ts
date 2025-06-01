@@ -5,6 +5,8 @@ import { env } from "@/lib/env"
 import { prisma } from "@/lib/db"
 import { sendAdminEmail } from '@/lib/email'
 import Stripe from 'stripe'
+import { logError } from '@/lib/errors'
+import type { OrderStatus } from '@prisma/client'
 
 // Retry configuration
 const MAX_RETRIES = 3
@@ -33,12 +35,12 @@ async function updateOrderStatusByStripeSession(stripeSessionId: string, status:
     await prisma.order.update({
       where: { stripeSessionId },
       data: {
-        status: status as any,
+        status: status as OrderStatus,
         updatedAt: new Date(),
       },
     })
   } catch (error) {
-    console.error('Failed to update order status:', error)
+    logError('Failed to update order status: ' + (error instanceof Error ? error.message : String(error)))
     throw error
   }
 }
@@ -52,18 +54,18 @@ async function sendOrderCancelledEmail(email: string, orderId: string) {
       `Dear customer,<br><br>Your order (ID: ${orderId}) was cancelled due to an inventory issue after payment. You will be refunded.<br><br>If you have any questions, please contact support.<br><br>Thank you.<br><a href="${appUrl}/orders/${orderId}">View your order</a>`
     );
   } catch (err) {
-    console.error('[WEBHOOK] Failed to send user cancellation email:', err);
+    logError('[WEBHOOK] Failed to send user cancellation email: ' + (err instanceof Error ? err.message : String(err)));
   }
 }
 
 export async function POST(req: Request) {
   try {
-    console.log("[WEBHOOK] Received webhook request")
+    logError("[WEBHOOK] Received webhook request")
     const body = await req.text()
     const signature = req.headers.get("stripe-signature")
 
     if (!signature) {
-      console.log("[WEBHOOK] No signature found")
+      logError("[WEBHOOK] No signature found")
       return NextResponse.json(
         { error: "No signature found" },
         { status: 400 }
@@ -71,7 +73,7 @@ export async function POST(req: Request) {
     }
 
     if (!env.STRIPE_WEBHOOK_SECRET) {
-      console.log("[WEBHOOK] Webhook secret not configured")
+      logError("[WEBHOOK] Webhook secret not configured")
       return NextResponse.json(
         { error: "Webhook secret not configured" },
         { status: 500 }
@@ -81,30 +83,30 @@ export async function POST(req: Request) {
     const event = await handleWebhookWithRetry(body, signature)
 
     // Log the event for debugging
-    console.log("[WEBHOOK] Event received:", event.type, JSON.stringify(event.data.object, null, 2));
+    logError('[WEBHOOK] Event received: ' + event.type + ' ' + JSON.stringify(event.data.object, null, 2));
     // Add pre-switch event type log
-    console.log("[WEBHOOK] Event type received (pre-switch):", event.type);
+    logError('[WEBHOOK] Event type received (pre-switch): ' + event.type);
 
     // Add detailed debug logging
-    console.log('[WEBHOOK][DEBUG] Event type:', event.type);
+    logError('[WEBHOOK][DEBUG] Event type: ' + event.type);
     let paymentIntentId = null;
     if (event.type === 'charge.succeeded') {
       paymentIntentId = event.data.object.payment_intent;
-      console.log('[WEBHOOK][DEBUG] charge.succeeded PaymentIntent ID:', paymentIntentId);
+      logError('[WEBHOOK][DEBUG] charge.succeeded PaymentIntent ID: ' + String(paymentIntentId));
     } else if (event.type === 'payment_intent.succeeded') {
       paymentIntentId = event.data.object.id;
-      console.log('[WEBHOOK][DEBUG] payment_intent.succeeded PaymentIntent ID:', paymentIntentId);
+      logError('[WEBHOOK][DEBUG] payment_intent.succeeded PaymentIntent ID: ' + String(paymentIntentId));
     } else if (event.type === 'checkout.session.completed') {
       paymentIntentId = event.data.object.id;
-      console.log('[WEBHOOK][DEBUG] checkout.session.completed Session ID:', paymentIntentId);
+      logError('[WEBHOOK][DEBUG] checkout.session.completed Session ID: ' + String(paymentIntentId));
     }
     // Log order lookup
     if (paymentIntentId) {
       const order = await prisma.order.findUnique({ where: { stripeSessionId: paymentIntentId } });
       if (order) {
-        console.log('[WEBHOOK][DEBUG] Found order:', order.id, 'status:', order.status);
+        logError('[WEBHOOK][DEBUG] Found order: ' + order.id + ' status: ' + order.status);
       } else {
-        console.log('[WEBHOOK][DEBUG] No order found for stripeSessionId:', paymentIntentId);
+        logError('[WEBHOOK][DEBUG] No order found for stripeSessionId: ' + String(paymentIntentId));
       }
     }
 
@@ -112,10 +114,10 @@ export async function POST(req: Request) {
       case "checkout.session.completed": {
         const session = event.data.object;
         const updateData: any = {
-          status: 'PROCESSING',
+          status: 'PAID' as OrderStatus,
           customerEmail: session.customer_details?.email,
         };
-        console.log('[WEBHOOK] Updating order with:', updateData);
+        logError('[WEBHOOK] Updating order with: ' + JSON.stringify(updateData));
         const order = await prisma.order.update({
           where: { stripeSessionId: session.id },
           data: updateData,
@@ -153,9 +155,9 @@ export async function POST(req: Request) {
         const paymentIntent = event.data.object;
         const charge = paymentIntent.charges?.data?.[0];
         const updateData: any = {
-          status: 'PROCESSING',
+          status: 'PAID' as OrderStatus,
         };
-        console.log('[WEBHOOK] Updating order with:', updateData);
+        logError('[WEBHOOK] Updating order with: ' + JSON.stringify(updateData));
         const order = await prisma.order.update({
           where: { stripeSessionId: paymentIntent.id },
           data: updateData,
@@ -202,11 +204,11 @@ export async function POST(req: Request) {
       case "charge.succeeded": {
         const charge = event.data.object;
         const paymentIntentId = charge.payment_intent;
-        console.log('[WEBHOOK] charge.succeeded for paymentIntent:', paymentIntentId);
+        logError('[WEBHOOK] charge.succeeded for paymentIntent: ' + String(paymentIntentId));
         const updatedOrders = await prisma.order.updateMany({
           where: { stripeSessionId: paymentIntentId },
           data: {
-            status: 'PROCESSING',
+            status: 'PAID' as OrderStatus,
             customerEmail: charge.billing_details?.email || null,
           },
         });
@@ -240,30 +242,28 @@ export async function POST(req: Request) {
             });
           }
         }
-        console.log('[WEBHOOK] Order(s) updated:', updatedOrders.count);
+        logError('[WEBHOOK] Order(s) updated: ' + String(updatedOrders.count));
         break;
       }
       default:
-        console.log(`[WEBHOOK] Unhandled event type: ${event.type}`)
+        logError('[WEBHOOK] Unhandled event type: ' + event.type)
     }
 
     return NextResponse.json({ received: true })
   } catch (error) {
-    console.error("Error processing webhook:", error)
-    
+    logError("Error processing webhook: " + (error instanceof Error ? error.message : String(error)))
     // Log detailed error information
     if (error instanceof Error) {
-      console.error({
+      logError({
         name: error.name,
         message: error.message,
         stack: error.stack,
       })
     }
-
     return NextResponse.json(
-      { 
+      {
         error: "Webhook handler failed",
-        message: error instanceof Error ? error.message : "Unknown error"
+        message: error instanceof Error ? error.message : String(error),
       },
       { status: 400 }
     )

@@ -172,7 +172,7 @@ const OrderItems = ({ items, total }: { items: OrderItem[], total: number }) => 
                 <div className="flex items-center">
                   <div className="h-10 w-10 flex-shrink-0">
                     <Image
-                      src={item.product.images[0]}
+                      src={item.product.images && item.product.images.length > 0 ? item.product.images[0] : 'https://via.placeholder.com/400'}
                       alt={item.product.name}
                       width={40}
                       height={40}

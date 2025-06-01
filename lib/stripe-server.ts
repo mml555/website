@@ -111,4 +111,25 @@ export async function handleWebhookEvent(payload: string, signature: string) {
       'WEBHOOK_HANDLING_FAILED'
     );
   }
+}
+
+// Helper to check if Stripe is in test mode
+export function isStripeTestMode() {
+  const key = process.env.STRIPE_SECRET_KEY || '';
+  // Stripe test keys start with 'sk_test_'
+  return key.startsWith('sk_test_');
+}
+
+// Helper to get Stripe environment status
+export function getStripeEnvStatus() {
+  return {
+    isConfigured: Boolean(process.env.STRIPE_SECRET_KEY && process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY),
+    isTestMode: isStripeTestMode(),
+    secretKeyPresent: Boolean(process.env.STRIPE_SECRET_KEY),
+    publishableKeyPresent: Boolean(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY),
+    webhookSecretPresent: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+    secretKey: process.env.STRIPE_SECRET_KEY ? (process.env.STRIPE_SECRET_KEY.startsWith('sk_') ? process.env.STRIPE_SECRET_KEY.slice(0, 8) + '...' : 'invalid') : 'missing',
+    publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ? (process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.startsWith('pk_') ? process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.slice(0, 8) + '...' : 'invalid') : 'missing',
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ? process.env.STRIPE_WEBHOOK_SECRET.slice(0, 8) + '...' : 'missing',
+  };
 } 

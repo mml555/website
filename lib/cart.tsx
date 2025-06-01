@@ -141,15 +141,7 @@ export function CartProvider({ children }: CartProviderProps) {
     // Set isClient to true when component mounts
     useEffect(() => {
         setIsClient(true);
-        console.log('[Cart][DEBUG] isClient set to true');
     }, []);
-
-    // Track session and status for debug
-    useEffect(() => {
-        if (typeof window !== 'undefined') {
-            console.log('[Cart][DEBUG] Session:', session, 'Status:', status);
-        }
-    }, [session, status]);
 
     // Calculate total and item count whenever items change
     useEffect(() => {
@@ -179,7 +171,6 @@ export function CartProvider({ children }: CartProviderProps) {
         if (typeof window !== 'undefined') {
             // Always persist cart for guests (unauthenticated), even if empty
             if (currentItems.length === 0 && status !== 'unauthenticated') {
-                console.log('[Cart] Not persisting empty cart unless unauthenticated or explicit clear. Status:', status);
                 return;
             }
             try {
@@ -189,11 +180,8 @@ export function CartProvider({ children }: CartProviderProps) {
                     lastSynced: new Date().toISOString(),
                     version: '1.0',
                 };
-                console.log('[Cart] About to persist cartState:', cartState, 'Status:', status);
                 localStorage.setItem('cartState', JSON.stringify(cartState));
-                console.log('[Cart] Persisted cartState:', cartState);
             } catch (err) {
-                console.error('[Cart] Failed to persist cartState:', err);
             }
         }
     }, [isClient, status]);
@@ -201,26 +189,17 @@ export function CartProvider({ children }: CartProviderProps) {
     // On mount or when status changes, load cart from localStorage for guests
     useEffect(() => {
         if (!isClient || status === 'loading') return;
-        console.log('[Cart][DEBUG] Cart loading effect running. isClient:', isClient, 'status:', status);
         if (status === 'unauthenticated') {
             const cartState = loadCartState();
-            console.log('[Cart][DEBUG] Loaded cartState from localStorage:', cartState);
             const validItems = Array.isArray(cartState?.items) ? cartState.items.filter(validateCartItem) : [];
             if (cartState && validItems.length !== (cartState.items?.length || 0)) {
-                console.warn('[Cart] Cleaned up invalid items on mount:', cartState.items?.filter((item: any) => !validateCartItem(item)));
                 persistCartState(validItems, []);
             }
-            console.log('[Cart] About to setItems (mount):', validItems);
             setItems(validItems);
             setPendingChanges([]);
             setIsLoading(false); // Set loading to false after loading cart
-            console.log('[Cart][DEBUG] isLoading set to false after loading cart');
             setCartLoaded(true);
-            // Log loaded cart state
-            console.log('[Cart] Loaded cartState on mount:', cartState);
             if (cartState && (cartState.items as any[])?.some((item: any) => !item.productId)) {
-                console.warn('[Cart] Invalid items detected after load:', cartState.items);
-                console.trace();
             }
         }
     }, [isClient, status, persistCartState]);
@@ -242,7 +221,6 @@ export function CartProvider({ children }: CartProviderProps) {
             const filteredItems = normalizedItems.filter(item => typeof item.productId === 'string' && !!item.productId);
             const validItems = filteredItems.filter(validateCartItem);
             if (validItems.length !== itemsToSync.length) {
-                console.warn('[Cart] Skipping invalid cart items (failed validation):', itemsToSync.filter(item => !validateCartItem(item)));
             }
             const apiItems = validItems.map(item => ({
                 id: item.productId,
@@ -292,7 +270,6 @@ export function CartProvider({ children }: CartProviderProps) {
                 }
                 // Log error response for debugging
                 const errorBody = await response.text();
-                console.error('Failed to sync cart. Response:', errorBody);
                 throw new AppError('Failed to sync cart', response.status);
             }
 
@@ -304,7 +281,6 @@ export function CartProvider({ children }: CartProviderProps) {
                 setPendingChanges([]);
                 persistCartState(normalizedServerItems, []);
             } else {
-                console.error('[Cart] API response missing items array:', data);
             }
         } catch (err: any) {
             console.error('Failed to sync cart:', err);
@@ -313,8 +289,6 @@ export function CartProvider({ children }: CartProviderProps) {
             const isClientError = typeof err === 'object' && err !== null && 'status' in err && (err.status === 400 || err.status === 404);
             if (!isClientError) {
                 setPendingChanges(prev => [...prev, ...itemsToSync]);
-            } else {
-                console.error('[Cart] Not adding to pendingChanges due to client error:', err);
             }
         } finally {
             setIsLoading(false);
@@ -339,7 +313,6 @@ export function CartProvider({ children }: CartProviderProps) {
         } catch (err) {
             const { message } = handleApiError(err);
             setError(message);
-            console.error("Error saving cart:", err);
         }
     }, [items, isClient, pendingChanges, persistCartState]);
 
@@ -350,30 +323,34 @@ export function CartProvider({ children }: CartProviderProps) {
         const now = Date.now();
         if (shouldSync) {
             if (now - lastSyncTimeRef.current > 5000) {
-                console.log('[Cart][DEBUG] useEffect: Syncing cart on mount/login or interval. items:', items, 'pendingChanges:', pendingChanges, 'lastSyncTime:', lastSyncTimeRef.current);
                 syncCart(items);
                 lastSyncTimeRef.current = now;
             } else {
-                console.log('[Cart][DEBUG] useEffect: Skipping sync (recent user-initiated sync). lastSyncTime:', lastSyncTimeRef.current);
             }
         } else {
-            console.log('[Cart][DEBUG] useEffect: Not syncing cart (empty, no pending changes).');
         }
         if (shouldSync) {
             const interval = setInterval(() => {
                 const now = Date.now();
                 if (now - lastSyncTimeRef.current > 5000) {
-                    console.log('[Cart][DEBUG] useEffect: Periodic sync. items:', items, 'pendingChanges:', pendingChanges, 'lastSyncTime:', lastSyncTimeRef.current);
                     syncCart(items);
                     lastSyncTimeRef.current = now;
-                } else {
-                    console.log('[Cart][DEBUG] useEffect: Skipping periodic sync (recent user-initiated sync). lastSyncTime:', lastSyncTimeRef.current);
                 }
             }, 10 * 60 * 1000);
             return () => clearInterval(interval);
         }
         return undefined;
     }, [isClient, session?.user, items, pendingChanges, syncCart]);
+
+    // Debounce syncCart and only call when items actually change and the update was user-initiated
+    const debouncedSyncCart = useMemo(() => debounce((itemsToSync: CartItem[]) => {
+        if (session?.user && itemsToSync.length === 0) return; // Don't sync empty cart for authenticated users
+        if (userInitiatedRef.current) {
+            syncCart(itemsToSync);
+            lastSyncTimeRef.current = Date.now();
+            userInitiatedRef.current = false;
+        }
+    }, 1000), [syncCart, session]);
 
     // Debug log at the start of updateQuantity
     const updateQuantity = useCallback(async (id: string, quantity: number, variantId?: string): Promise<void> => {
@@ -428,14 +405,13 @@ export function CartProvider({ children }: CartProviderProps) {
             debouncedSyncCart(Array.isArray(updatedItems) ? updatedItems : []);
 
             if (session?.user) {
-                await syncCart(updatedItems);
+                syncCart(updatedItems);
             }
         } catch (err) {
             const { message } = handleApiError(err);
             setError(message);
-            console.error("Error updating quantity:", err);
         }
-    }, [items, pendingChanges, session, syncCart, rateLimitCooldown]);
+    }, [items, pendingChanges, session, syncCart, rateLimitCooldown, debouncedSyncCart, persistCartState]);
 
     // Debug log at the start of addItem
     const addItem = useCallback(async (item: CartItemInput, quantity: number = 1): Promise<void> => {
@@ -507,9 +483,8 @@ export function CartProvider({ children }: CartProviderProps) {
         } catch (err) {
             const { message } = handleApiError(err);
             setError(message);
-            console.error("Error adding item:", err);
         }
-    }, [items, pendingChanges, session, syncCart, rateLimitCooldown]);
+    }, [items, pendingChanges, rateLimitCooldown, debouncedSyncCart, persistCartState]);
 
     const removeItem = useCallback(async (id: string, variantId?: string): Promise<void> => {
         if (rateLimitCooldown) {
@@ -527,14 +502,13 @@ export function CartProvider({ children }: CartProviderProps) {
             debouncedSyncCart(Array.isArray(updatedItems) ? updatedItems : []);
 
             if (session?.user) {
-                await syncCart(updatedItems);
+                syncCart(updatedItems);
             }
         } catch (err) {
             const { message } = handleApiError(err);
             setError(message);
-            console.error("Error removing item:", err);
         }
-    }, [items, pendingChanges, session, syncCart, rateLimitCooldown]);
+    }, [items, pendingChanges, rateLimitCooldown, debouncedSyncCart, persistCartState, session?.user, syncCart]);
 
     // Helper to clear cart state and localStorage
     const clearCartAndStorage = useCallback(() => {
@@ -542,7 +516,6 @@ export function CartProvider({ children }: CartProviderProps) {
         setPendingChanges([]);
         if (isClient && typeof window !== 'undefined') {
             localStorage.removeItem('cartState');
-            console.log('[Cart] Cleared cartState from localStorage');
         }
         cartQueue.clear();
     }, [isClient]);
@@ -552,7 +525,7 @@ export function CartProvider({ children }: CartProviderProps) {
         userInitiatedRef.current = true;
         clearCartAndStorage();
         debouncedSyncCart([]);
-    }, [clearCartAndStorage]);
+    }, [clearCartAndStorage, debouncedSyncCart]);
 
     // Auto-clear error after 5 seconds unless cleared manually
     useEffect(() => {
@@ -589,14 +562,6 @@ export function CartProvider({ children }: CartProviderProps) {
         [items, addItem, removeItem, updateQuantity, clearCart, total, itemCount, error, clearError, isLoading, retrySync, pendingChanges]
     );
 
-    useEffect(() => {
-      if (typeof window !== 'undefined') {
-        // eslint-disable-next-line no-console
-        console.log('[CartContext] value on render:', value);
-        console.log('[CartContext] session:', session, 'status:', status);
-      }
-    }, [value, session, status]);
-
     // On login, merge guest and server cart, sync merged cart (only on transition)
     useEffect(() => {
         if (
@@ -631,7 +596,6 @@ export function CartProvider({ children }: CartProviderProps) {
                             }
                         }
                     } catch (err) {
-                        console.error('[Cart] Failed to merge guest cart on login:', err);
                     }
                 } else {
                     // Fallback: merge local guest cart with server cart as before
@@ -658,7 +622,6 @@ export function CartProvider({ children }: CartProviderProps) {
                     // Merge carts
                     const merged: CartItem[] = mergeCarts(normalizedGuestItems, normalizedServerItems as CartItem[]);
                     if (!Array.isArray(merged)) {
-                        console.error('[Cart] Attempted to setItems with non-array:', merged);
                         userInitiatedRef.current = false;
                         setItems([]);
                     } else {
@@ -666,17 +629,10 @@ export function CartProvider({ children }: CartProviderProps) {
                         setItems(merged);
                     }
                     persistCartState(Array.isArray(merged) ? merged : [], Array.isArray(pendingChanges) ? pendingChanges : []);
-                    // Log merged cart state
-                    console.log('[Cart] Merged cart state:', merged);
-                    if ((merged as any[]).some((item: any) => !item.productId)) {
-                        console.warn('[Cart] Invalid items detected after merge:', merged);
-                        console.trace();
-                    }
                     // Sync merged cart to server
                     if (session?.user) {
                         const validMerged = (Array.isArray(merged) ? merged : []).filter(validateCartItem);
                         if (validMerged.length !== (Array.isArray(merged) ? merged.length : 0)) {
-                            console.warn('[Cart] Skipping invalid merged cart items (failed validation):', (Array.isArray(merged) ? merged : []).filter(item => !validateCartItem(item)));
                         }
                         const apiItems = validMerged.map(item => ({
                             id: item.productId,
@@ -684,7 +640,7 @@ export function CartProvider({ children }: CartProviderProps) {
                             ...(typeof item.variantId === 'string' && item.variantId ? { variantId: item.variantId } : {}),
                             ...(typeof item.stockAtAdd === 'number' ? { stockAtAdd: item.stockAtAdd } : {}),
                         }));
-                        await fetch('/api/cart/sync', {
+                        fetch('/api/cart/sync', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             credentials: 'include',
@@ -708,9 +664,6 @@ export function CartProvider({ children }: CartProviderProps) {
     useEffect(() => {
         if (isClient && status === 'unauthenticated' && previouslyAuthenticatedRef.current) {
             clearCartAndStorage();
-            if (typeof window !== 'undefined') {
-                console.log('[CartContext] Cleared cart after logout.');
-            }
             previouslyAuthenticatedRef.current = false;
         }
     }, [isClient, status, clearCartAndStorage]);
@@ -720,7 +673,6 @@ export function CartProvider({ children }: CartProviderProps) {
         if (isLoading) {
             const timeout = setTimeout(() => {
                 setIsLoading(false);
-                console.warn('[Cart][DEBUG] Fallback: isLoading forced to false after 3s');
             }, 3000);
             return () => clearTimeout(timeout);
         }
@@ -762,23 +714,11 @@ export function CartProvider({ children }: CartProviderProps) {
                     }
                 }
             } catch (err) {
-                console.error('[Cart] Failed to load cart for authenticated user:', err);
             } finally {
                 setCartLoaded(true);
             }
         })();
     }, [isClient, status, cartLoaded, persistCartState]);
-
-    // Debounce syncCart and only call when items actually change and the update was user-initiated
-    const debouncedSyncCart = useMemo(() => debounce((itemsToSync: CartItem[]) => {
-        console.log('[Cart][DEBUG] debouncedSyncCart called. userInitiatedRef:', userInitiatedRef.current, 'items:', itemsToSync);
-        if (session?.user && itemsToSync.length === 0) return; // Don't sync empty cart for authenticated users
-        if (userInitiatedRef.current) {
-            syncCart(itemsToSync);
-            lastSyncTimeRef.current = Date.now();
-            userInitiatedRef.current = false;
-        }
-    }, 1000), [syncCart, session]);
 
     return (
         <CartContext.Provider value={value}>

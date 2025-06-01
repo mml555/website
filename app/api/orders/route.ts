@@ -10,6 +10,8 @@ import { generateOrderNumber } from '@/lib/order-utils'
 import nodemailer from 'nodemailer'
 import crypto from 'crypto'
 import redis, { getJsonFromRedis } from '@/lib/redis'
+import { logError } from '@/lib/errors'
+import * as Sentry from '@sentry/nextjs'
 
 // Initialize Redis client
 const redisClient = new Redis({
@@ -24,16 +26,16 @@ const CACHE_TTL = 300 // 5 minutes
 let stripe: Stripe | null = null;
 try {
   if (!process.env.STRIPE_SECRET_KEY) {
-    console.error('Stripe secret key is missing');
+    logError('Stripe secret key is missing');
   } else {
     stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
       maxNetworkRetries: 3,
       timeout: 20000, // 20 seconds
     });
-    console.log('Stripe initialized successfully');
+    logError('Stripe initialized successfully');
   }
 } catch (error) {
-  console.error('Failed to initialize Stripe:', error);
+  logError('Failed to initialize Stripe:', error instanceof Error ? error.message : String(error));
 }
 
 // --- Zod Schemas ---
@@ -122,7 +124,7 @@ async function logAudit(action: string, userId: string, details: any) {
       })
     }
   } catch (err) {
-    console.error('Audit log error:', err)
+    logError('Audit log error:', err instanceof Error ? err.message : String(err))
   }
 }
 
@@ -182,7 +184,7 @@ export async function GET(request: Request) {
           billingAddress: true,
         },
       })
-      console.log('[Order API][DEBUG] payment_intent:', payment_intent, 'order:', order, 'user:', order?.user);
+      logError('[Order API][DEBUG] payment_intent:', payment_intent, 'order:', order, 'user:', order?.user);
       if (!order) {
         return NextResponse.json(
           { message: 'Order not found' },
@@ -328,7 +330,7 @@ export async function GET(request: Request) {
     ])
 
     // Log orders before filtering
-    console.log('Orders before filtering:', orders);
+    logError('Orders before filtering: ' + JSON.stringify(orders));
     // Filter out orders with missing users
     const filteredOrders = orders.filter((order: any) => order.user);
 
@@ -353,7 +355,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json(response, { headers: getResponseHeaders() })
   } catch (error) {
-    console.error("Error fetching orders:", error)
+    Sentry.captureException(error)
+    logError("Error fetching orders:", error instanceof Error ? error.message : String(error))
     return NextResponse.json(
       { 
         message: "Failed to fetch orders",
@@ -422,7 +425,7 @@ export async function PATCH(req: Request) {
       { headers: getResponseHeaders() }
     )
   } catch (error) {
-    console.error("[ORDERS_PATCH]", error)
+    logError("[ORDERS_PATCH]", error)
     return NextResponse.json(
       { 
         message: "Failed to update orders",
@@ -436,16 +439,16 @@ export async function PATCH(req: Request) {
 export async function POST(request: Request) {
   try {
     // Log environment variables (without sensitive values)
-    console.log('Environment check:', {
+    logError('Environment check:', JSON.stringify({
       hasStripeKey: !!process.env.STRIPE_SECRET_KEY,
       hasStripeWebhookSecret: !!process.env.STRIPE_WEBHOOK_SECRET,
       hasPublishableKey: !!process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
-    });
+    }));
 
     const session = await getServerSession(authOptions);
     let userId = session?.user?.id || null;
     const data = await request.json();
-    console.log('Creating order with data:', {
+    logError('Creating order with data:', JSON.stringify({
       userId,
       isGuest: !userId,
       total: data.total,
@@ -455,7 +458,7 @@ export async function POST(request: Request) {
       items: data.items,
       shippingAddress: data.shippingAddress,
       billingAddress: data.billingAddress,
-    });
+    }));
 
     // If not logged in, require email and auto-create user if needed
     if (!userId) {
@@ -498,7 +501,7 @@ export async function POST(request: Request) {
 
     // Validate total amount
     if (!data.total || data.total <= 0) {
-      console.error('Invalid total amount:', data.total);
+      logError('Invalid total amount:', String(data.total));
       return NextResponse.json(
         { message: "Invalid total amount" },
         { status: 400, headers: getResponseHeaders() }
@@ -507,7 +510,7 @@ export async function POST(request: Request) {
 
     // Validate items
     if (!data.items || !Array.isArray(data.items) || data.items.length === 0) {
-      console.error('Invalid items:', data.items);
+      logError('Invalid items:', JSON.stringify(data.items));
       return NextResponse.json(
         { message: "Invalid items" },
         { status: 400, headers: getResponseHeaders() }
@@ -516,7 +519,7 @@ export async function POST(request: Request) {
 
     // Validate shipping address
     if (!data.shippingAddress) {
-      console.error('Missing shipping address');
+      logError('Missing shipping address');
       return NextResponse.json(
         { message: "Shipping address is required" },
         { status: 400, headers: getResponseHeaders() }
@@ -557,14 +560,14 @@ export async function POST(request: Request) {
     let paymentIntent;
     try {
       const amount = Math.round(data.total * 100); // Convert to cents
-      console.log('Creating payment intent with amount:', {
+      logError('Creating payment intent with amount:', JSON.stringify({
         originalTotal: data.total,
         amountInCents: amount,
         items: data.items.length
-      });
+      }));
 
       if (!stripe) {
-        console.error('Stripe is not initialized');
+        logError('Stripe is not initialized');
         return NextResponse.json(
           { message: "Stripe is not initialized" },
           { status: 500, headers: getResponseHeaders() }
@@ -583,13 +586,13 @@ export async function POST(request: Request) {
         receipt_email: data.shippingAddress?.email || data.billingAddress?.email,
       });
 
-      console.log('Payment intent created successfully:', paymentIntent.id);
+      logError('Payment intent created successfully:', paymentIntent.id);
     } catch (stripeError: any) {
-      console.error('Failed to create payment intent:', {
+      logError('Failed to create payment intent:', JSON.stringify({
         error: stripeError.message,
         code: stripeError.code,
         type: stripeError.type,
-      });
+      }));
       return NextResponse.json(
         {
           message: "Failed to create payment intent",
@@ -654,19 +657,19 @@ export async function POST(request: Request) {
           billingAddress: true,
         },
       });
-      console.log('Order created successfully:', order.id, order.orderNumber);
+      logError('Order created successfully: ' + order.id + ' ' + order.orderNumber);
     } catch (orderError) {
-      console.error('Order creation failed:', orderError);
+      logError('Order creation failed: ' + (orderError instanceof Error ? orderError.message : String(orderError)));
       // Optionally: cancel the PaymentIntent if order creation fails
       if (paymentIntent?.id) {
         try {
           await stripe.paymentIntents.cancel(paymentIntent.id);
         } catch (cancelError) {
-          console.error('Failed to cancel payment intent after order creation error:', cancelError);
+          logError('Failed to cancel payment intent after order creation error: ' + (cancelError instanceof Error ? cancelError.message : String(cancelError)));
         }
       }
       return NextResponse.json(
-        { message: "Failed to create order", error: orderError instanceof Error ? orderError.message : orderError },
+        { message: "Failed to create order", details: orderError instanceof Error ? orderError.message : orderError },
         { status: 500, headers: getResponseHeaders() }
       );
     }
@@ -677,7 +680,8 @@ export async function POST(request: Request) {
       clientSecret: paymentIntent.client_secret,
     }, { headers: getResponseHeaders() });
   } catch (err) {
-    console.error('Order creation error:', err);
-    return new Response(JSON.stringify({ error: 'Failed to create order', details: err instanceof Error ? err.message : err }), { status: 500 });
+    Sentry.captureException(err)
+    logError('Order creation error: ' + (err instanceof Error ? err.message : String(err)));
+    return new Response(JSON.stringify({ message: 'Failed to create order', details: err instanceof Error ? err.message : err }), { status: 500 });
   }
 } 

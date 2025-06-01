@@ -69,7 +69,7 @@ export function OrderProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (!response || typeof response !== 'object' || !('ok' in response)) {
-        throw new Error('No response from server. Please try again.');
+        throw new Error('Failed to create order');
       }
       if (!response.ok) {
         let data;
@@ -78,7 +78,7 @@ export function OrderProvider({ children }: { children: React.ReactNode }) {
         } catch (e) {
           data = {};
         }
-        throw new Error((data && data.error) || 'Failed to create order');
+        throw new Error((data && (data.message || data.error)) || 'Failed to create order');
       }
 
       const newOrder = await response.json();
@@ -105,9 +105,12 @@ export function OrderProvider({ children }: { children: React.ReactNode }) {
         },
       });
 
+      if (!response || typeof response !== 'object' || !('ok' in response)) {
+        throw new Error('Failed to fetch orders');
+      }
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.error || 'Failed to fetch orders');
+        throw new Error(data.message || data.error || 'Failed to fetch orders');
       }
 
       const data = await response.json();
@@ -124,7 +127,7 @@ export function OrderProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       setError(null);
 
-      const response = await fetch(`/api/orders/${orderId}/status`, {
+      const response = await fetch(`/api/orders/${orderId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -132,9 +135,12 @@ export function OrderProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ status }),
       });
 
+      if (!response || typeof response !== 'object' || !('ok' in response)) {
+        throw new Error('Failed to update order status');
+      }
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.error || 'Failed to update order status');
+        throw new Error(data.message || data.error || 'Failed to update order status');
       }
 
       const updatedOrder = await response.json();

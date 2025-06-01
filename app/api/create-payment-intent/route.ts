@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getStripeConfig } from '@/lib/stripe-server'
 import Stripe from 'stripe'
-import { prisma } from '@/lib/db'
+import { prisma } from '@/lib/prisma'
 
 export async function POST(req: Request) {
   try {

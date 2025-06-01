@@ -3,6 +3,7 @@ import { Resend } from 'resend'
 import { Redis } from '@upstash/redis'
 import { headers } from 'next/headers'
 import { z } from 'zod'
+import * as Sentry from '@sentry/nextjs'
 
 // Initialize Redis client
 const redis = new Redis({
@@ -139,6 +140,7 @@ export async function POST(request: Request) {
       { status: 200, headers: getResponseHeaders() }
     )
   } catch (error) {
+    Sentry.captureException(error)
     // Log detailed error (for debugging)
     console.error('Newsletter subscription error:', {
       error,

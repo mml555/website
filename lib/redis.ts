@@ -13,7 +13,6 @@ try {
       url: redisUrl,
       token: redisToken,
     })
-    console.log('Redis initialized successfully')
   }
 } catch (error) {
   console.warn('Failed to initialize Redis:', error)

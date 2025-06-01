@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { prisma } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 import { Redis } from '@upstash/redis';
 import { decimalToNumber } from '@/lib/utils';
 import { getJsonFromRedis } from '@/lib/redis';

@@ -67,17 +67,6 @@ function assertEnvVar(key: keyof typeof process.env): string {
 
 // Debug logging for environment variables
 if (!isClient) {
-  console.log('Environment Variables Status:', {
-    NODE_ENV: process.env.NODE_ENV,
-    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ? 'present' : 'missing',
-    STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET ? 'present' : 'missing',
-    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ? 'present' : 'missing',
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ? 'present' : 'missing',
-    NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL ? 'present' : 'missing',
-    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL ? 'present' : 'missing',
-    NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL ? 'present' : 'missing',
-  })
-
   // Add detailed logging for client environment variables
   console.log('Client Environment Variables:', {
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,

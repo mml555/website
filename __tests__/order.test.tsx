@@ -225,7 +225,7 @@ describe('Order Functionality', () => {
     fireEvent.click(screen.getByRole('button', { name: /update status/i }));
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(`/api/orders/${mockOrder.id}/status`, {
+      expect(global.fetch).toHaveBeenCalledWith(`/api/orders/${mockOrder.id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',

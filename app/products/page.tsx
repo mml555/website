@@ -105,7 +105,6 @@ export default function ProductsPage() {
           throw new Error(errorData.message || `Failed to fetch categories: ${response.status}`)
         }
         const data = await response.json()
-        console.log("Raw API Response:", data) // Debug log
         
         // Validate categories data
         if (!data.categories || !Array.isArray(data.categories)) {
@@ -163,7 +162,6 @@ export default function ProductsPage() {
           throw new Error(errorData.message || `Failed to fetch products: ${response.status}`)
         }
         const data = await response.json()
-        console.log("Raw API Response:", data) // Debug log
         
         // Validate products data
         if (!data.products || !Array.isArray(data.products)) {
@@ -174,6 +172,12 @@ export default function ProductsPage() {
             data: data
           })
           throw new Error("Invalid products data received: expected an array")
+        }
+
+        // Safeguard for pagination/total
+        if (!data.pagination || typeof data.pagination.total !== "number" || typeof data.pagination.limit !== "number") {
+          console.error("Invalid pagination structure:", data.pagination)
+          throw new Error("Invalid response format: missing pagination/total/limit")
         }
 
         // Zod validation

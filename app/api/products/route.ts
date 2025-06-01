@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/db'
+import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
+import * as Sentry from '@sentry/nextjs'
+import { validateCsrfToken } from '@/lib/csrf'
+import redis, { withRedis } from '@/lib/redis'
 
 // --- Zod Schemas ---
 const querySchema = z.object({
@@ -98,6 +101,18 @@ function setCachedData(key: string, data: any) {
     data,
     timestamp: Date.now()
   });
+}
+
+async function invalidateProductAndCategoryCache() {
+  if (!redis) return;
+  await withRedis(async (r) => {
+    const productKeys = await r.keys('products:*');
+    const categoryKeys = await r.keys('categories:*');
+    const keys = [...productKeys, ...categoryKeys];
+    if (keys.length > 0) {
+      await r.del(...keys);
+    }
+  }, undefined);
 }
 
 export async function GET(request: Request) {
@@ -211,11 +226,11 @@ export async function GET(request: Request) {
       sku: product.sku || null,
       featured: product.featured || false,
       isActive: product.isActive ?? true,
+      weight: product.weight ? Number(product.weight) : null,
       category: product.category ? {
         id: product.category.id,
         name: product.category.name
       } : null,
-      weight: product.weight ? Number(product.weight) : null,
       variants: product.variants?.map((variant: any) => ({
         id: variant.id,
         name: variant.name,
@@ -237,11 +252,15 @@ export async function GET(request: Request) {
     const response = {
       products: transformedProducts,
       pagination: {
-        total,
-        pages: Math.ceil(total / limit),
-        currentPage: page,
-        limit
-      }
+        total: total,
+        limit: limit,
+        page: page,
+        totalPages: Math.ceil(total / limit)
+      },
+      total: total,
+      totalPages: Math.ceil(total / limit),
+      currentPage: page,
+      totalItems: total
     };
 
     // Cache the response
@@ -249,13 +268,28 @@ export async function GET(request: Request) {
 
     return NextResponse.json(response);
   } catch (error) {
+    Sentry.captureException(error)
     console.error('[API_PRODUCTS_ERROR]', {
       message: error instanceof Error ? error.message : 'Unknown error',
       stack: error instanceof Error ? error.stack : undefined
     });
 
+    // Always return a consistent shape, even on error
     return NextResponse.json(
-      { error: 'Failed to fetch products' },
+      {
+        products: [],
+        pagination: {
+          total: 0,
+          limit: 10,
+          page: 1,
+          totalPages: 0
+        },
+        total: 0,
+        totalPages: 0,
+        currentPage: 1,
+        totalItems: 0,
+        error: error instanceof Error ? error.message : 'Failed to fetch products'
+      },
       { status: 500 }
     );
   }
@@ -263,6 +297,16 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    // CSRF protection: expect token in header 'x-csrf-token'.
+    // (Cookie support can be added if using NextRequest)
+    const csrfToken = request.headers.get('x-csrf-token')
+    if (!validateCsrfToken(csrfToken)) {
+      return NextResponse.json(
+        { error: 'Invalid or missing CSRF token' },
+        { status: 403 }
+      )
+    }
+
     const session = await getServerSession(authOptions)
     if (!session?.user) {
       return NextResponse.json(
@@ -320,6 +364,9 @@ export async function POST(request: Request) {
       }
     })
 
+    // Invalidate product and category cache after mutation
+    await invalidateProductAndCategoryCache();
+
     // Transform the response to match the expected Product type
     const transformedProduct = {
       id: newProduct.id,
@@ -357,6 +404,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(transformedProduct)
   } catch (error) {
+    Sentry.captureException(error)
     console.error('[API_PRODUCTS_POST_ERROR]', {
       message: error instanceof Error ? error.message : 'Unknown error',
       stack: error instanceof Error ? error.stack : undefined

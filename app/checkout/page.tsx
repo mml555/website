@@ -46,16 +46,6 @@ export default function CheckoutPage() {
   const [billingAddress, setBillingAddress] = useState<Address | null>(null);
   const [shippingRate, setShippingRate] = useState<ShippingRate | null>(null);
 
-  // Debug logging
-  useEffect(() => {
-    console.log('Checkout Page Debug:', {
-      hasStripePromise: Boolean(stripePromise),
-      items,
-      total,
-      clientSecret,
-    });
-  }, [stripePromise, items, total, clientSecret]);
-
   // Parse session storage safely
   useEffect(() => {
     try {

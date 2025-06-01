@@ -31,6 +31,19 @@ export const userSchema = z.object({
   role: z.enum(['USER', 'ADMIN']),
 })
 
+export const userAddressSchema = z.object({
+  label: z.string().optional(),
+  type: z.enum(['SHIPPING', 'BILLING']),
+  name: z.string().min(1, 'Name is required'),
+  email: z.string().email('Valid email required'),
+  phone: z.string().optional(),
+  address: z.string().min(1, 'Address is required'),
+  city: z.string().min(1, 'City is required'),
+  state: z.string().min(1, 'State is required'),
+  zipCode: z.string().min(1, 'ZIP code is required'),
+  country: z.string().min(1, 'Country is required'),
+})
+
 export type ProductInput = z.infer<typeof productSchema>
 export type CategoryInput = z.infer<typeof categorySchema>
 export type OrderInput = z.infer<typeof orderSchema>

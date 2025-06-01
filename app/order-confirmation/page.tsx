@@ -53,10 +53,7 @@ export default function OrderConfirmationPage() {
         const data = await response.json()
         setOrder(data)
         if (data && data.status && ["PAID", "PROCESSING", "SHIPPED", "DELIVERED"].includes(data.status)) {
-          console.log('[OrderConfirmation] Clearing cart after confirmed payment/order.');
           clearCart();
-        } else {
-          console.log('[OrderConfirmation] Order not in a paid/confirmed state, not clearing cart.');
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load order details")

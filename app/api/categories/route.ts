@@ -6,6 +6,8 @@ import { z } from "zod"
 import type { Prisma } from "@prisma/client"
 import { withRedis, getJsonFromRedis } from "@/lib/redis"
 import { rateLimit } from "@/lib/rate-limit"
+import * as Sentry from '@sentry/nextjs'
+import redis from '@/lib/redis'
 
 // --- Zod Schemas ---
 const querySchema = z.object({
@@ -63,6 +65,18 @@ async function setCachedData(key: string, data: any) {
     },
     undefined
   );
+}
+
+async function invalidateProductAndCategoryCache() {
+  if (!redis) return;
+  await withRedis(async (r) => {
+    const productKeys = await r.keys('products:*');
+    const categoryKeys = await r.keys('categories:*');
+    const keys = [...productKeys, ...categoryKeys];
+    if (keys.length > 0) {
+      await r.del(...keys);
+    }
+  }, undefined);
 }
 
 export async function GET(request: Request) {
@@ -172,6 +186,7 @@ export async function GET(request: Request) {
     console.log('[API_CATEGORIES] Returning response');
     return NextResponse.json(response)
   } catch (error) {
+    Sentry.captureException(error)
     if (error instanceof Error && error.message.includes('Rate limit exceeded')) {
       console.log('[API_CATEGORIES] Rate limit exceeded');
       return NextResponse.json(
@@ -241,18 +256,11 @@ export async function POST(request: Request) {
     }
 
     // Invalidate categories cache
-    await withRedis(
-      async (redis) => {
-        const keys = await redis.keys('categories:*');
-        if (keys.length > 0) {
-          await redis.del(...keys);
-        }
-      },
-      undefined
-    );
+    await invalidateProductAndCategoryCache();
 
     return NextResponse.json(transformedCategory)
   } catch (error) {
+    Sentry.captureException(error)
     console.error('[API_CATEGORIES_POST_ERROR]', {
       message: error instanceof Error ? error.message : 'Unknown error',
       stack: error instanceof Error ? error.stack : undefined

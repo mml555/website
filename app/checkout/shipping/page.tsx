@@ -1,15 +1,18 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useCart } from '@/lib/cart'
 import { calculateTax, isValidUSAddress, US_STATES, TaxCalculation, getCountiesForState } from '@/lib/tax-calculator'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, Loader2, CheckCircle2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import type { ShippingOption } from '@/lib/shipping'
+import { useSession } from 'next-auth/react'
 
 interface Address {
+  id?: string;
   street: string;
   city: string;
   state: string;
@@ -22,28 +25,6 @@ interface BillingAddress extends Address {
   name: string;
   email: string;
   phone?: string;
-}
-
-// Shipping rates based on order total
-const SHIPPING_RATES = {
-  STANDARD: {
-    name: 'Standard Shipping',
-    rate: 5.99,
-    minOrder: 0,
-    maxOrder: 50
-  },
-  EXPRESS: {
-    name: 'Express Shipping',
-    rate: 12.99,
-    minOrder: 0,
-    maxOrder: 100
-  },
-  FREE: {
-    name: 'Free Shipping',
-    rate: 0,
-    minOrder: 50,
-    maxOrder: Infinity
-  }
 }
 
 export default function ShippingPage() {
@@ -72,7 +53,17 @@ export default function ShippingPage() {
   const [sameAsShipping, setSameAsShipping] = useState(true)
   const [taxCalculation, setTaxCalculation] = useState<TaxCalculation | null>(null)
   const [availableCounties, setAvailableCounties] = useState<string[]>([])
-  const [selectedShipping, setSelectedShipping] = useState(SHIPPING_RATES.STANDARD)
+  const [selectedShipping, setSelectedShipping] = useState<ShippingOption | null>(null)
+  const [shippingOptions, setShippingOptions] = useState<ShippingOption[]>([])
+  const [shippingLoading, setShippingLoading] = useState(false)
+  const [shippingError, setShippingError] = useState<string | null>(null)
+  const { data: session, status } = useSession()
+  const isLoggedIn = !!session?.user
+  const [addressBook, setAddressBook] = useState<Address[]>([])
+  const [addressBookLoading, setAddressBookLoading] = useState(false)
+  const [addressBookError, setAddressBookError] = useState<string | null>(null)
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null)
+  const [addressSaved, setAddressSaved] = useState(false)
 
   const MINIMUM_AMOUNT = 0.50
 
@@ -99,14 +90,68 @@ export default function ShippingPage() {
     }
   }, [shippingAddress.state, shippingAddress.county, cartTotal])
 
-  // Update shipping rate based on order total
-  useEffect(() => {
-    if (cartTotal >= SHIPPING_RATES.FREE.minOrder) {
-      setSelectedShipping(SHIPPING_RATES.FREE)
-    } else if (cartTotal >= SHIPPING_RATES.STANDARD.minOrder) {
-      setSelectedShipping(SHIPPING_RATES.STANDARD)
+  // Fetch shipping options from backend
+  const fetchShippingOptions = useCallback(async () => {
+    setShippingLoading(true)
+    setShippingError(null)
+    try {
+      const res = await fetch('/api/shipping/calculate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          country: shippingAddress.country,
+          state: shippingAddress.state,
+          zipCode: shippingAddress.postalCode,
+          total: cartTotal,
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to fetch shipping options')
+      const data = await res.json()
+      setShippingOptions(data.options || [])
+      // Default to first option if not set
+      if (data.options && data.options.length > 0) {
+        setSelectedShipping(data.options[0])
+      }
+    } catch (err: any) {
+      setShippingError(err.message || 'Error fetching shipping options')
+      setShippingOptions([])
+    } finally {
+      setShippingLoading(false)
     }
-  }, [cartTotal])
+  }, [shippingAddress.country, shippingAddress.state, shippingAddress.postalCode, cartTotal])
+
+  // Fetch shipping options when address or cart total changes
+  useEffect(() => {
+    if (shippingAddress.country && shippingAddress.state && shippingAddress.postalCode && cartTotal > 0) {
+      fetchShippingOptions()
+    }
+  }, [fetchShippingOptions])
+
+  // Fetch address book for logged-in users
+  useEffect(() => {
+    if (isLoggedIn) {
+      setAddressBookLoading(true)
+      setAddressSaved(false)
+      fetch('/api/user/addresses')
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) setAddressBook(data)
+          setAddressBookLoading(false)
+        })
+        .catch(err => {
+          setAddressBookError('Failed to load saved addresses')
+          setAddressBookLoading(false)
+        })
+    }
+  }, [isLoggedIn])
+
+  // When a saved address is selected, prefill the form
+  useEffect(() => {
+    if (selectedAddressId && addressBook.length > 0) {
+      const addr = addressBook.find(a => a.id === selectedAddressId)
+      if (addr) setShippingAddress(addr)
+    }
+  }, [selectedAddressId, addressBook])
 
   const handleAddressChange = (
     type: 'shipping' | 'billing',
@@ -163,11 +208,31 @@ export default function ShippingPage() {
     sessionStorage.setItem('billingAddress', JSON.stringify(billingAddress))
     sessionStorage.setItem('shippingRate', JSON.stringify(selectedShipping))
 
+    if (isLoggedIn && !selectedAddressId) {
+      // Save new address to address book
+      try {
+        const res = await fetch('/api/user/addresses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(shippingAddress),
+        })
+        if (res.ok) {
+          const newAddr = await res.json()
+          setAddressBook(prev => [...prev, newAddr])
+          setSelectedAddressId(newAddr.id)
+          setAddressSaved(true)
+          setTimeout(() => setAddressSaved(false), 2000)
+        }
+      } catch (err) {
+        // Ignore for now, could show error
+      }
+    }
+
     // Navigate to payment page
     router.push('/checkout/payment')
   }
 
-  const totalWithShipping = taxCalculation ? taxCalculation.total + selectedShipping.rate : cartTotal + selectedShipping.rate
+  const totalWithShipping = taxCalculation ? taxCalculation.total + (selectedShipping?.rate ?? 0) : cartTotal + (selectedShipping?.rate ?? 0)
 
   return (
     <div className="max-w-4xl mx-auto p-6">
@@ -200,8 +265,8 @@ export default function ShippingPage() {
                 </>
               )}
               <div className="flex justify-between">
-                <span>Shipping ({selectedShipping.name}):</span>
-                <span>${selectedShipping.rate.toFixed(2)}</span>
+                <span>Shipping ({selectedShipping?.name || 'No Shipping'}):</span>
+                <span>${selectedShipping?.rate?.toFixed(2) || '0.00'}</span>
               </div>
               <div className="flex justify-between font-medium pt-2 border-t">
                 <span>Total:</span>
@@ -217,6 +282,39 @@ export default function ShippingPage() {
             <CardTitle>Shipping Address</CardTitle>
           </CardHeader>
           <CardContent>
+            {isLoggedIn && (
+              <div className="mb-4">
+                {addressBookLoading ? (
+                  <div className="flex items-center text-gray-500"><Loader2 className="animate-spin h-4 w-4 mr-2" />Loading saved addresses...</div>
+                ) : addressBookError ? (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Error</AlertTitle>
+                    <AlertDescription>{addressBookError}</AlertDescription>
+                  </Alert>
+                ) : addressBook.length > 0 ? (
+                  <>
+                    <label htmlFor="saved-address" className="block text-sm font-medium text-gray-700 mb-1">Choose a saved address</label>
+                    <select
+                      id="saved-address"
+                      value={selectedAddressId || ''}
+                      onChange={e => setSelectedAddressId(e.target.value || null)}
+                      className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                    >
+                      <option value="">-- Enter a new address --</option>
+                      {addressBook.map(addr => (
+                        <option key={addr.id} value={addr.id}>
+                          {addr.street}, {addr.city}, {addr.state} {addr.postalCode}
+                        </option>
+                      ))}
+                    </select>
+                    {addressSaved && (
+                      <div className="flex items-center text-green-600 mt-2"><CheckCircle2 className="h-4 w-4 mr-1" />Address saved!</div>
+                    )}
+                  </>
+                ) : null}
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="col-span-2">
                 <label htmlFor="shipping-street" className="block text-sm font-medium text-gray-700">
@@ -459,35 +557,50 @@ export default function ShippingPage() {
             <CardTitle>Shipping Method</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {Object.values(SHIPPING_RATES).map((method) => (
-                <div
-                  key={method.name}
-                  className={`flex items-center p-4 border rounded-md cursor-pointer ${
-                    selectedShipping.name === method.name
-                      ? 'border-indigo-500 bg-indigo-50'
-                      : 'border-gray-200'
-                  }`}
-                  onClick={() => setSelectedShipping(method)}
-                >
-                  <input
-                    type="radio"
-                    name="shipping-method"
-                    checked={selectedShipping.name === method.name}
-                    onChange={() => setSelectedShipping(method)}
-                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <div className="ml-3">
-                    <label className="block text-sm font-medium text-gray-900">
-                      {method.name}
-                    </label>
-                    <p className="text-sm text-gray-500">
-                      {method.rate === 0 ? 'Free' : `$${method.rate.toFixed(2)}`}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {shippingLoading ? (
+              <div className="text-gray-500">Loading shipping options...</div>
+            ) : shippingError ? (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Error</AlertTitle>
+                <AlertDescription>{shippingError}</AlertDescription>
+              </Alert>
+            ) : (
+              <div className="space-y-4">
+                {shippingOptions.map((method: ShippingOption) => {
+                  const inputId = `shipping-method-${method.name.replace(/\s+/g, '-')}`;
+                  return (
+                    <div
+                      key={method.name}
+                      className={`flex items-center p-4 border rounded-md cursor-pointer ${
+                        !!selectedShipping && selectedShipping.name === method.name
+                          ? 'border-indigo-500 bg-indigo-50'
+                          : 'border-gray-200'
+                      }`}
+                      onClick={() => setSelectedShipping(method)}
+                    >
+                      <input
+                        type="radio"
+                        name="shipping-method"
+                        id={inputId}
+                        checked={!!selectedShipping && selectedShipping.name === method.name}
+                        onChange={() => setSelectedShipping(method)}
+                        className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <div className="ml-3">
+                        <label htmlFor={inputId} className="block text-sm font-medium text-gray-900">
+                          {method.name}
+                        </label>
+                        <p className="text-sm text-gray-500">
+                          {method.rate === 0 ? 'Free' : `$${method.rate.toFixed(2)}`}
+                        </p>
+                        <p className="text-xs text-gray-400">Estimated {method.estimatedDays} days</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -502,7 +615,7 @@ export default function ShippingPage() {
         <Button
           type="submit"
           className="w-full"
-          disabled={cartTotal < MINIMUM_AMOUNT}
+          disabled={cartTotal < MINIMUM_AMOUNT || shippingLoading || addressBookLoading || (isLoggedIn && !selectedAddressId && addressBookLoading)}
         >
           Continue to Payment
         </Button>

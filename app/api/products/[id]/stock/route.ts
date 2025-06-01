@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/db'
+import { prisma } from '@/lib/prisma'
 
 // Cache configuration
 const CACHE_DURATION = 30; // 30 seconds in seconds
