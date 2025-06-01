@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "next-auth/react"
-import { prisma } from "@/lib/db"
+import { prisma } from "@/lib/prisma"
 import { useCart } from '@/lib/cart'
 
 interface OrderDetails {

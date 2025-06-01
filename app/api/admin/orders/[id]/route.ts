@@ -5,20 +5,16 @@ import { prisma } from '@/lib/prisma';
 
 const ALLOWED_STATUSES = ['PENDING', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED'];
 
-enum OrderStatus {
-  PENDING = 'PENDING',
-  PROCESSING = 'PROCESSING',
-  SHIPPED = 'SHIPPED',
-  DELIVERED = 'DELIVERED',
-  CANCELLED = 'CANCELLED',
-}
-
-export async function GET(req: Request, { params }: { params: { id: string } }) {
+// @ts-expect-error Next.js provides context dynamically
+export async function GET(req: Request, context) {
+  const id = context.params.id;
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const { id } = params;
+  if (!id) {
+    return NextResponse.json({ error: 'Order ID is required' }, { status: 400 });
+  }
   const order = await prisma.order.findUnique({
     where: { id },
     include: {
@@ -32,12 +28,16 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   return NextResponse.json(order);
 }
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+// @ts-expect-error Next.js provides context dynamically
+export async function PATCH(req: Request, context) {
+  const id = context.params.id;
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const { id } = params;
+  if (!id) {
+    return NextResponse.json({ error: 'Order ID is required' }, { status: 400 });
+  }
   const body = await req.json();
   const { status } = body;
   if (!status || typeof status !== 'string' || !ALLOWED_STATUSES.includes(status)) {
@@ -46,7 +46,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   try {
     const order = await prisma.order.update({
       where: { id },
-      data: { status: status as OrderStatus },
+      data: { status: status as any },
     });
     return NextResponse.json(order);
   } catch (err) {

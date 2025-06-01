@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx'
-import { prisma } from './db'
+import { prisma } from '@/lib/prisma'
 
 export async function importProductsFromExcel(file: File) {
   try {

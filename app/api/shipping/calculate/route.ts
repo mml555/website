@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { calculateShippingOptions } from '@/lib/shipping'
 import { z } from 'zod'
-import * as Sentry from '@sentry/nextjs'
 
 const shippingSchema = z.object({
   country: z.string().min(1, 'Country is required'),
@@ -27,7 +26,6 @@ export async function POST(req: Request) {
     const options = calculateShippingOptions({ country, state, zipCode, total, weight })
     return NextResponse.json({ options })
   } catch (error) {
-    Sentry.captureException(error)
     return NextResponse.json({ error: error instanceof Error ? error.message : error }, { status: 400 })
   }
 } 

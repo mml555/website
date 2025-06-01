@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
-import { prisma } from "@/lib/db"
-import { Prisma } from "@prisma/client"
+import { prisma } from "@/lib/prisma"
 import Stripe from "stripe"
 import { z } from "zod"
 import { Redis } from '@upstash/redis'
@@ -11,7 +10,6 @@ import nodemailer from 'nodemailer'
 import crypto from 'crypto'
 import redis, { getJsonFromRedis } from '@/lib/redis'
 import { logError } from '@/lib/errors'
-import * as Sentry from '@sentry/nextjs'
 
 // Initialize Redis client
 const redisClient = new Redis({
@@ -184,7 +182,7 @@ export async function GET(request: Request) {
           billingAddress: true,
         },
       })
-      logError('[Order API][DEBUG] payment_intent:', payment_intent, 'order:', order, 'user:', order?.user);
+      logError(`[Order API][DEBUG] payment_intent: ${payment_intent} order: ${JSON.stringify(order)} user: ${JSON.stringify(order?.user)}`);
       if (!order) {
         return NextResponse.json(
           { message: 'Order not found' },
@@ -355,7 +353,6 @@ export async function GET(request: Request) {
 
     return NextResponse.json(response, { headers: getResponseHeaders() })
   } catch (error) {
-    Sentry.captureException(error)
     logError("Error fetching orders:", error instanceof Error ? error.message : String(error))
     return NextResponse.json(
       { 
@@ -425,7 +422,7 @@ export async function PATCH(req: Request) {
       { headers: getResponseHeaders() }
     )
   } catch (error) {
-    logError("[ORDERS_PATCH]", error)
+    logError("[ORDERS_PATCH] " + (error instanceof Error ? error.message : String(error)))
     return NextResponse.json(
       { 
         message: "Failed to update orders",
@@ -680,7 +677,6 @@ export async function POST(request: Request) {
       clientSecret: paymentIntent.client_secret,
     }, { headers: getResponseHeaders() });
   } catch (err) {
-    Sentry.captureException(err)
     logError('Order creation error: ' + (err instanceof Error ? err.message : String(err)));
     return new Response(JSON.stringify({ message: 'Failed to create order', details: err instanceof Error ? err.message : err }), { status: 500 });
   }

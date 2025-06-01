@@ -4,7 +4,6 @@ import { z } from 'zod'
 import { rateLimit } from '@/lib/rate-limit'
 import redis, { getJsonFromRedis } from '@/lib/redis'
 import { Decimal } from '@prisma/client/runtime/library'
-import * as Sentry from '@sentry/nextjs'
 
 // Cache configuration
 const CACHE_DURATION = 30; // 30 seconds
@@ -164,7 +163,6 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(stockInfo)
   } catch (error) {
-    Sentry.captureException(error)
     if (error instanceof Error && error.message.includes('Rate limit exceeded')) {
       return NextResponse.json(
         { error: 'Too many requests. Please try again later.' },

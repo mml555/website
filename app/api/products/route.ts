@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
-import * as Sentry from '@sentry/nextjs'
+import { getServerSession } from 'next-auth'
+import { prisma } from '@/lib/prisma'
+import { authOptions } from '@/lib/auth'
+// import { captureException } from '@sentry/nextjs'
 import { validateCsrfToken } from '@/lib/csrf'
 import redis, { withRedis } from '@/lib/redis'
 
@@ -118,17 +118,11 @@ async function invalidateProductAndCategoryCache() {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
-    const params = Object.fromEntries(searchParams.entries())
-    
-    // Validate and parse query parameters
-    const validatedParams = querySchema.safeParse(params)
-    if (!validatedParams.success) {
-      return NextResponse.json(
-        { error: 'Invalid query parameters', details: validatedParams.error },
-        { status: 400 }
-      )
+    const query = Object.fromEntries(searchParams.entries())
+    const parsed = querySchema.safeParse(query)
+    if (!parsed.success) {
+      return new Response(JSON.stringify({ error: 'Invalid query parameters', details: parsed.error.format() }), { status: 400 })
     }
-
     const {
       search,
       category,
@@ -138,160 +132,82 @@ export async function GET(request: Request) {
       sortBy = 'newest',
       page = 1,
       limit = 10
-    } = validatedParams.data
+    } = parsed.data
 
-    // Check cache first
-    const cacheKey = getCacheKey(request.url);
-    const cachedData = getCachedData(cacheKey);
-    if (cachedData) {
-      return NextResponse.json(cachedData);
+    // Build price filter separately to avoid using 'where' before declaration
+    let priceFilter: any = {}
+    if (typeof minPrice === 'number') priceFilter.gte = minPrice
+    if (typeof maxPrice === 'number') priceFilter.lte = maxPrice
+
+    const where: any = {
+      ...(search && { name: { contains: search, mode: 'insensitive' } }),
+      ...(category && { categoryId: category }),
+      ...(Object.keys(priceFilter).length > 0 && { price: priceFilter }),
+      ...(stockFilter === 'in_stock' && { stock: { gt: 0 } }),
+      ...(stockFilter === 'out_of_stock' && { stock: 0 }),
     }
 
-    // Build where clause
-    const where = {
-      AND: [
-        // Search condition
-        search ? {
-          OR: [
-            { name: { contains: search, mode: 'insensitive' as const } },
-            { description: { contains: search, mode: 'insensitive' as const } }
-          ]
-        } : {},
-        // Category filter
-        category ? { categoryId: category } : {},
-        // Price range
-        {
-          AND: [
-            minPrice ? { price: { gte: minPrice } } : {},
-            maxPrice ? { price: { lte: maxPrice } } : {}
-          ]
+    let orderBy: any = { createdAt: 'desc' }
+    switch (sortBy) {
+      case 'price_asc':
+        orderBy = { price: 'asc' }
+        break
+      case 'price_desc':
+        orderBy = { price: 'desc' }
+        break
+      case 'name_asc':
+        orderBy = { name: 'asc' }
+        break
+      case 'name_desc':
+        orderBy = { name: 'desc' }
+        break
+      case 'stock_desc':
+        orderBy = { stock: 'desc' }
+        break
+      case 'newest':
+      default:
+        orderBy = { createdAt: 'desc' }
+        break
+    }
+
+    const skip = (page - 1) * limit
+    console.log('[API_PRODUCTS_GET]', { query, where, orderBy, skip, limit })
+    const [products, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        orderBy,
+        skip,
+        take: limit,
+        include: {
+          category: { select: { id: true, name: true } },
+          variants: true,
         },
-        // Stock filter
-        stockFilter === 'in_stock' ? { stock: { gt: 0 } } : 
-        stockFilter === 'out_of_stock' ? { stock: { equals: 0 } } : {}
-      ]
-    }
+      }),
+      prisma.product.count({ where }),
+    ])
 
-    // Build order by clause
-    let orderBy: any = { createdAt: "desc" };
-    if (sortBy === "price_asc") {
-      orderBy = { price: "asc" };
-    } else if (sortBy === "price_desc") {
-      orderBy = { price: "desc" };
-    } else if (sortBy === "name_asc") {
-      orderBy = { name: "asc" };
-    } else if (sortBy === "name_desc") {
-      orderBy = { name: "desc" };
-    } else if (sortBy === "stock_desc") {
-      orderBy = { stock: "desc" };
-    }
-
-    // Get total count for pagination
-    const total = await prisma.product.count({ where })
-
-    // Fetch products with pagination
-    const products = await prisma.product.findMany({
-      where,
-      orderBy,
-      skip: (page - 1) * limit,
-      take: limit,
-      include: {
-        category: {
-          select: {
-            id: true,
-            name: true
-          }
-        },
-        variants: {
-          select: {
-            id: true,
-            name: true,
-            price: true,
-            stock: true,
-            type: true
-          }
-        }
-      }
-    })
-
-    // Transform the response to match the expected schema
-    const transformedProducts = products.map((product: any) => ({
-      id: product.id,
-      name: product.name,
-      description: product.description || "",
-      price: typeof product.price === "string" ? parseFloat(product.price) : Number(product.price),
-      stock: Number(product.stock),
-      images: Array.isArray(product.images) ? product.images : [],
-      categoryId: product.categoryId,
-      sku: product.sku || null,
-      featured: product.featured || false,
-      isActive: product.isActive ?? true,
-      weight: product.weight ? Number(product.weight) : null,
-      category: product.category ? {
-        id: product.category.id,
-        name: product.category.name
-      } : null,
-      variants: product.variants?.map((variant: any) => ({
-        id: variant.id,
-        name: variant.name,
-        price: typeof variant.price === "string" ? parseFloat(variant.price) : Number(variant.price),
-        stock: Number(variant.stock),
-        type: variant.type || ""
-      })) || [],
-      tags: [],
-      rating: 0,
-      reviews: 0,
-      brand: undefined,
-      dimensions: undefined,
-      shipping: undefined,
-      metadata: undefined,
-      createdAt: product.createdAt.toISOString(),
-      updatedAt: product.updatedAt.toISOString()
+    // Transform price fields to numbers if needed
+    const productsWithNumberFields = products.map((p: any) => ({
+      ...p,
+      price: typeof p.price === 'object' && 'toNumber' in p.price ? p.price.toNumber() : Number(p.price),
+      cost: p.cost ? (typeof p.cost === 'object' && 'toNumber' in p.cost ? p.cost.toNumber() : Number(p.cost)) : null,
+      salePrice: p.salePrice ? (typeof p.salePrice === 'object' && 'toNumber' in p.salePrice ? p.salePrice.toNumber() : Number(p.salePrice)) : null,
     }))
 
-    const response = {
-      products: transformedProducts,
-      pagination: {
-        total: total,
-        limit: limit,
-        page: page,
-        totalPages: Math.ceil(total / limit)
-      },
-      total: total,
-      totalPages: Math.ceil(total / limit),
-      currentPage: page,
-      totalItems: total
-    };
+    const pages = Math.ceil(total / limit)
+    const pagination = { total, page, limit, pages }
 
-    // Cache the response
-    setCachedData(cacheKey, response);
-
-    return NextResponse.json(response);
+    return new Response(JSON.stringify({ products: productsWithNumberFields, pagination }), { status: 200 })
   } catch (error) {
-    Sentry.captureException(error)
-    console.error('[API_PRODUCTS_ERROR]', {
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
-    });
-
-    // Always return a consistent shape, even on error
-    return NextResponse.json(
-      {
-        products: [],
-        pagination: {
-          total: 0,
-          limit: 10,
-          page: 1,
-          totalPages: 0
-        },
-        total: 0,
-        totalPages: 0,
-        currentPage: 1,
-        totalItems: 0,
-        error: error instanceof Error ? error.message : 'Failed to fetch products'
-      },
-      { status: 500 }
-    );
+    // Custom error logger
+    console.error('[API_PRODUCTS_GET_ERROR]', {
+      message: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined,
+      time: new Date().toISOString(),
+      route: '/api/products',
+      method: 'GET',
+    })
+    return new Response(JSON.stringify({ error: 'Failed to fetch products' }), { status: 500 })
   }
 }
 
@@ -404,7 +320,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(transformedProduct)
   } catch (error) {
-    Sentry.captureException(error)
+    // captureException(error)
     console.error('[API_PRODUCTS_POST_ERROR]', {
       message: error instanceof Error ? error.message : 'Unknown error',
       stack: error instanceof Error ? error.stack : undefined

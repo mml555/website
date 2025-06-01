@@ -54,6 +54,17 @@ function checkEnv() {
   const schema = isProduction ? requiredEnvSchema : developmentEnvSchema
   
   try {
+    // Debug print
+    console.log('process.env snapshot:', {
+      STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+      STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+      NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+      NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL,
+      NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+      NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
+      NODE_ENV: process.env.NODE_ENV,
+    });
     schema.parse(process.env)
     console.log('✅ Environment variables are valid')
     return true

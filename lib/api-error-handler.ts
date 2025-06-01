@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ZodError } from 'zod'
 import { Prisma } from '@prisma/client'
-import * as Sentry from '@sentry/nextjs'
+// import * as Sentry from '@sentry/nextjs'
 
 export class ApiError extends Error {
   constructor(
@@ -16,8 +16,8 @@ export class ApiError extends Error {
 }
 
 export function handleApiError(error: unknown) {
-  // Log to Sentry
-  Sentry.captureException(error)
+  // Log to console instead of Sentry
+  console.error(error)
 
   if (error instanceof ApiError) {
     return NextResponse.json(

@@ -1,4 +1,4 @@
-import { prisma } from '../lib/db';
+import { prisma } from '../lib/prisma';
 
 async function simulateInventoryFailure(orderId: string) {
   if (!orderId) {

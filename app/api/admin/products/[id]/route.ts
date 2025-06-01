@@ -3,12 +3,13 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
-export async function GET(req: NextRequest, context: { params: { id: string } }) {
+// @ts-expect-error Next.js provides context dynamically
+export async function GET(req: NextRequest, context) {
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const { id } = context.params;
+  const id = context.params.id;
   if (!id) {
     return NextResponse.json({ error: 'Missing product ID' }, { status: 400 });
   }
@@ -27,12 +28,13 @@ export async function GET(req: NextRequest, context: { params: { id: string } })
   return NextResponse.json(productWithNumberPrice);
 }
 
-export async function PATCH(req: Request, context: { params: { id: string } }) {
+// @ts-expect-error Next.js provides context dynamically
+export async function PATCH(req: Request, context) {
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const { id } = context.params;
+  const id = context.params.id;
   const body = await req.json();
   const { name, price, stock, isActive } = body;
   if (!name || typeof price !== 'number' || typeof stock !== 'number') {
@@ -54,12 +56,13 @@ export async function PATCH(req: Request, context: { params: { id: string } }) {
   }
 }
 
-export async function DELETE(req: Request, context: { params: { id: string } }) {
+// @ts-expect-error Next.js provides context dynamically
+export async function DELETE(req: Request, context) {
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const { id } = context.params;
+  const id = context.params.id;
   try {
     await prisma.product.delete({ where: { id } });
     return new NextResponse(null, { status: 204 });

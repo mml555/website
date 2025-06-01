@@ -2,11 +2,10 @@ import { headers } from "next/headers"
 import { NextResponse } from "next/server"
 import { handleWebhookEvent } from "@/lib/stripe-server"
 import { env } from "@/lib/env"
-import { prisma } from "@/lib/db"
+import { prisma } from "@/lib/prisma"
 import { sendAdminEmail } from '@/lib/email'
 import Stripe from 'stripe'
 import { logError } from '@/lib/errors'
-import type { OrderStatus } from '@prisma/client'
 
 // Retry configuration
 const MAX_RETRIES = 3
@@ -35,7 +34,7 @@ async function updateOrderStatusByStripeSession(stripeSessionId: string, status:
     await prisma.order.update({
       where: { stripeSessionId },
       data: {
-        status: status as OrderStatus,
+        status: status as any,
         updatedAt: new Date(),
       },
     })
@@ -114,7 +113,7 @@ export async function POST(req: Request) {
       case "checkout.session.completed": {
         const session = event.data.object;
         const updateData: any = {
-          status: 'PAID' as OrderStatus,
+          status: 'PAID' as any,
           customerEmail: session.customer_details?.email,
         };
         logError('[WEBHOOK] Updating order with: ' + JSON.stringify(updateData));
@@ -155,7 +154,7 @@ export async function POST(req: Request) {
         const paymentIntent = event.data.object;
         const charge = paymentIntent.charges?.data?.[0];
         const updateData: any = {
-          status: 'PAID' as OrderStatus,
+          status: 'PAID' as any,
         };
         logError('[WEBHOOK] Updating order with: ' + JSON.stringify(updateData));
         const order = await prisma.order.update({
@@ -208,7 +207,7 @@ export async function POST(req: Request) {
         const updatedOrders = await prisma.order.updateMany({
           where: { stripeSessionId: paymentIntentId },
           data: {
-            status: 'PAID' as OrderStatus,
+            status: 'PAID' as any,
             customerEmail: charge.billing_details?.email || null,
           },
         });

@@ -1,4 +1,4 @@
-import { prisma } from '../lib/db';
+import { prisma } from '../lib/prisma';
 
 async function resetInventoryForOrder(orderId: string, stock: number = 10) {
   if (!orderId) {

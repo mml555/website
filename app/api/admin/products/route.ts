@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     prisma.product.count({ where }),
   ]);
   // Convert price, cost, salePrice from Decimal to number
-  const productsWithNumberFields = products.map((p) => ({
+  const productsWithNumberFields = products.map((p: any) => ({
     ...p,
     price: typeof p.price === 'object' && 'toNumber' in p.price ? p.price.toNumber() : Number(p.price),
     cost: p.cost ? (typeof p.cost === 'object' && 'toNumber' in p.cost ? p.cost.toNumber() : Number(p.cost)) : null,

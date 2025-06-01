@@ -1,5 +1,5 @@
 // import { prisma } from '../lib/db';
-import { prisma } from '../lib/db';
+import { prisma } from '../lib/prisma';
 import fetch from 'node-fetch';
 
 async function main() {

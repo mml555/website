@@ -1,38 +1,30 @@
 import { Redis } from '@upstash/redis'
 
-let redis: Redis | null = null
-
-try {
-  const redisUrl = process.env.UPSTASH_REDIS_REST_URL
-  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN
-
-  if (!redisUrl || !redisToken) {
-    console.warn('Redis configuration missing. Please set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in your .env file')
-  } else {
-    redis = new Redis({
-      url: redisUrl,
-      token: redisToken,
+const redis = process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+  ? new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN,
     })
+  : null
+
+export default redis
+
+export async function withRedis<T>(fn: (r: Redis) => Promise<T>, fallback?: T): Promise<T | undefined> {
+  if (!redis) return fallback
+  try {
+    return await fn(redis)
+  } catch (e) {
+    return fallback
   }
-} catch (error) {
-  console.warn('Failed to initialize Redis:', error)
 }
 
-// Helper function to handle Redis operations with fallback
-export async function withRedis<T>(
-  operation: (redis: Redis) => Promise<T>,
-  fallbackValue: T
-): Promise<T> {
-  if (!redis) {
-    console.warn('Redis not initialized, using fallback value')
-    return fallbackValue
-  }
-
+export async function getJsonFromRedis<T>(key: string): Promise<T | null> {
+  if (!redis) return null
   try {
-    return await operation(redis)
-  } catch (error) {
-    console.warn('Redis operation failed:', error)
-    return fallbackValue
+    const value = await redis.get(key)
+    return value ? JSON.parse(value as string) : null
+  } catch {
+    return null
   }
 }
 
@@ -54,27 +46,4 @@ export async function initializeRedis() {
 }
 
 // Initialize Redis on server start
-initializeRedis()
-
-// Defensive helper for reading JSON from Redis
-export async function getJsonFromRedis<T = any>(key: string): Promise<T | null> {
-  if (!redis) return null;
-  try {
-    const value = await redis.get(key);
-    if (typeof value === 'string') {
-      try {
-        return JSON.parse(value) as T;
-      } catch (err) {
-        console.warn('Failed to parse cached data, deleting bad cache key:', err);
-        await redis.del(key);
-        return null;
-      }
-    }
-    return null;
-  } catch (err) {
-    console.warn('Redis getJsonFromRedis error:', err);
-    return null;
-  }
-}
-
-export default redis 
+initializeRedis() 
