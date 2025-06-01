@@ -5,7 +5,6 @@ export NODE_OPTIONS="--max-old-space-size=8192"
 
 # Disable telemetry and Sentry in development
 export NEXT_TELEMETRY_DISABLED=1
-export NEXT_DISABLE_SENTRY=1
 
 # Clear caches
 rm -rf .next

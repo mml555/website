@@ -1,0 +1,21 @@
+{
+  "root": false,
+  "plugins": ["no-server-imports"],
+  "rules": {
+    "no-restricted-imports": [
+      "warn",
+      {
+        "paths": [
+          "fs", "path", "os", "child_process", "process", "crypto", "zlib", "http", "https", "net", "tls", "dns", "cluster", "worker_threads", "module", "vm", "perf_hooks", "inspector", "dgram", "readline", "repl", "stream", "timers", "tty", "url", "util", "v8", "assert", "constants", "domain", "events", "punycode", "querystring", "string_decoder"
+        ],
+        "message": "Server-only Node.js modules must not be imported in client components."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["**/*.tsx", "**/*.ts"],
+      "excludedFiles": ["**/app/api/**", "**/lib/**", "**/scripts/**", "**/prisma/**"]
+    }
+  ]
+} 

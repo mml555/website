@@ -1,5 +1,6 @@
 const { Redis } = require('@upstash/redis');
 require('dotenv').config();
+console.log('Loaded env:', process.env);
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
