@@ -18,14 +18,25 @@ jobs:
       - run: npm run test:coverage
       - name: Run API integration tests
         run: npm run test:api
-      - name: Generate and upload coverage badge
-        uses: jakejarvis/jest-coverage-report-github-action@v1.2.1
+      - name: Generate coverage badge
+        run: |
+          npm install -g coverage-badges-cli
+          coverage-badges
+      - name: Upload coverage badge
+        uses: actions/upload-artifact@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          gist-token: ${{ secrets.GIST_TOKEN }}
-          gist-id: ${{ secrets.GIST_ID }}
-          badge-label: 'coverage'
-          badge-color: 'brightgreen'
+          name: coverage-badge
+          path: coverage-badge.svg
+          if-no-files-found: error
+
+      - name: Update README with coverage badge
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "docs: update coverage badge"
+          file_pattern: |
+            README.md
+            coverage-badge.svg
+          branch: main
 
 # Instructions:
 # 1. Create a gist on GitHub to store the badge JSON (empty file, e.g. coverage-badge.json).

@@ -1,4 +1,4 @@
-[![Coverage Status](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/mml555/f6318c837cbd2b3e918052c43274f450/raw/coverage-badge.json)](https://github.com/YOUR_REPO/actions/workflows/ci.yml)
+[![Coverage Status](https://raw.githubusercontent.com/mml555/website/main/coverage-badge.svg)](https://github.com/mml555/website/actions/workflows/coverage-badge.yml)
 
 # E-Commerce Web Application
 
