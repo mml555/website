@@ -1,5 +1,6 @@
 // NOTE: This file is server-only. Do NOT import in client components.
 import { PrismaClient } from '@prisma/client'
+import { nodeEnv } from './env'
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
@@ -11,4 +12,4 @@ export const prisma =
     log: ['query', 'info', 'warn', 'error'],
   })
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma 
+if (nodeEnv !== 'production') globalForPrisma.prisma = prisma 

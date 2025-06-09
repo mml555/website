@@ -1,270 +1,178 @@
-import { headers } from "next/headers"
 import { NextResponse } from "next/server"
-import { handleWebhookEvent } from "@/lib/stripe-server"
-import { env } from "@/lib/env"
+import Stripe from "stripe"
 import { prisma } from "@/lib/prisma"
-import { sendAdminEmail } from '@/lib/email'
-import Stripe from 'stripe'
 import { logError } from '@/lib/errors'
+import redis from '@/lib/redis'
+import { OrderStatus } from '@prisma/client'
 
-// Retry configuration
-const MAX_RETRIES = 3
-const RETRY_DELAY = 1000 // 1 second
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2023-10-16' });
 
-// Helper function to handle webhook retries
-async function handleWebhookWithRetry(
-  body: string,
-  signature: string,
-  retryCount: number = 0
-): Promise<any> {
-  try {
-    return await handleWebhookEvent(body, signature)
-  } catch (error) {
-    if (retryCount < MAX_RETRIES) {
-      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY))
-      return handleWebhookWithRetry(body, signature, retryCount + 1)
-    }
-    throw error
+export async function POST(request: Request) {
+  const body = await request.text();
+  const signature = request.headers.get('stripe-signature');
+
+  if (!signature || !process.env.STRIPE_WEBHOOK_SECRET) {
+    return NextResponse.json({ error: 'Missing stripe signature or webhook secret' }, { status: 400 });
   }
-}
 
-// Helper function to update order status by stripeSessionId
-async function updateOrderStatusByStripeSession(stripeSessionId: string, status: string) {
   try {
-    await prisma.order.update({
-      where: { stripeSessionId },
-      data: {
-        status: status as any,
-        updatedAt: new Date(),
-      },
-    })
-  } catch (error) {
-    logError('Failed to update order status: ' + (error instanceof Error ? error.message : String(error)))
-    throw error
-  }
-}
-
-// Add user notification email for order cancellation/refund
-async function sendOrderCancelledEmail(email: string, orderId: string) {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-  try {
-    await sendAdminEmail(
-      'Your order was cancelled and refunded',
-      `Dear customer,<br><br>Your order (ID: ${orderId}) was cancelled due to an inventory issue after payment. You will be refunded.<br><br>If you have any questions, please contact support.<br><br>Thank you.<br><a href="${appUrl}/orders/${orderId}">View your order</a>`
+    const event = stripe.webhooks.constructEvent(
+      body,
+      signature,
+      process.env.STRIPE_WEBHOOK_SECRET
     );
-  } catch (err) {
-    logError('[WEBHOOK] Failed to send user cancellation email: ' + (err instanceof Error ? err.message : String(err)));
-  }
-}
 
-export async function POST(req: Request) {
-  try {
-    logError("[WEBHOOK] Received webhook request")
-    const body = await req.text()
-    const signature = req.headers.get("stripe-signature")
+    console.log('[WEBHOOK] Received event:', event.type);
 
-    if (!signature) {
-      logError("[WEBHOOK] No signature found")
-      return NextResponse.json(
-        { error: "No signature found" },
-        { status: 400 }
-      )
-    }
-
-    if (!env.STRIPE_WEBHOOK_SECRET) {
-      logError("[WEBHOOK] Webhook secret not configured")
-      return NextResponse.json(
-        { error: "Webhook secret not configured" },
-        { status: 500 }
-      )
-    }
-
-    const event = await handleWebhookWithRetry(body, signature)
-
-    // Log the event for debugging
-    logError('[WEBHOOK] Event received: ' + event.type + ' ' + JSON.stringify(event.data.object, null, 2));
-    // Add pre-switch event type log
-    logError('[WEBHOOK] Event type received (pre-switch): ' + event.type);
-
-    // Add detailed debug logging
-    logError('[WEBHOOK][DEBUG] Event type: ' + event.type);
-    let paymentIntentId = null;
     if (event.type === 'charge.succeeded') {
-      paymentIntentId = event.data.object.payment_intent;
-      logError('[WEBHOOK][DEBUG] charge.succeeded PaymentIntent ID: ' + String(paymentIntentId));
-    } else if (event.type === 'payment_intent.succeeded') {
-      paymentIntentId = event.data.object.id;
-      logError('[WEBHOOK][DEBUG] payment_intent.succeeded PaymentIntent ID: ' + String(paymentIntentId));
-    } else if (event.type === 'checkout.session.completed') {
-      paymentIntentId = event.data.object.id;
-      logError('[WEBHOOK][DEBUG] checkout.session.completed Session ID: ' + String(paymentIntentId));
-    }
-    // Log order lookup
-    if (paymentIntentId) {
-      const order = await prisma.order.findUnique({ where: { stripeSessionId: paymentIntentId } });
-      if (order) {
-        logError('[WEBHOOK][DEBUG] Found order: ' + order.id + ' status: ' + order.status);
-      } else {
-        logError('[WEBHOOK][DEBUG] No order found for stripeSessionId: ' + String(paymentIntentId));
-      }
-    }
+      const charge = event.data.object as Stripe.Charge;
+      const paymentIntentId = typeof charge.payment_intent === 'string' ? charge.payment_intent : undefined;
+      console.log('[WEBHOOK] charge.succeeded for paymentIntent:', paymentIntentId);
 
-    switch (event.type) {
-      case "checkout.session.completed": {
-        const session = event.data.object;
-        const updateData: any = {
-          status: 'PAID' as any,
-          customerEmail: session.customer_details?.email,
-        };
-        logError('[WEBHOOK] Updating order with: ' + JSON.stringify(updateData));
-        const order = await prisma.order.update({
-          where: { stripeSessionId: session.id },
-          data: updateData,
-        });
-        // Upsert billing address if present
-        if (session.customer_details?.address) {
-          await prisma.billingAddress.upsert({
-            where: { orderId: order.id },
-            update: {
-              name: session.customer_details.name || '',
-              email: session.customer_details.email || '',
-              phone: session.customer_details.phone || '',
-              address: session.customer_details.address.line1 || '',
-              city: session.customer_details.address.city || '',
-              state: session.customer_details.address.state || '',
-              zipCode: session.customer_details.address.postal_code || '',
-              country: session.customer_details.address.country || '',
-            },
-            create: {
-              orderId: order.id,
-              name: session.customer_details.name || '',
-              email: session.customer_details.email || '',
-              phone: session.customer_details.phone || '',
-              address: session.customer_details.address.line1 || '',
-              city: session.customer_details.address.city || '',
-              state: session.customer_details.address.state || '',
-              zipCode: session.customer_details.address.postal_code || '',
-              country: session.customer_details.address.country || '',
-            },
-          });
+      if (!paymentIntentId) {
+        console.error('[WEBHOOK] No payment intent ID found in charge');
+        return NextResponse.json({ error: 'No payment intent ID found' }, { status: 400 });
+      }
+
+      // Find the order by stripeSessionId
+      const order = await prisma.order.findFirst({
+        where: { stripeSessionId: paymentIntentId },
+        include: {
+          billingAddress: true
         }
-        break;
+      });
+
+      if (!order) {
+        console.log('[WEBHOOK] No order found for stripeSessionId:', paymentIntentId);
+        return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 });
       }
-      case "payment_intent.succeeded": {
-        const paymentIntent = event.data.object;
-        const charge = paymentIntent.charges?.data?.[0];
-        const updateData: any = {
-          status: 'PAID' as any,
-        };
-        logError('[WEBHOOK] Updating order with: ' + JSON.stringify(updateData));
-        const order = await prisma.order.update({
-          where: { stripeSessionId: paymentIntent.id },
-          data: updateData,
-        });
-        // Upsert billing address if present
-        if (charge?.billing_details?.address) {
-          await prisma.billingAddress.upsert({
-            where: { orderId: order.id },
-            update: {
-              name: charge.billing_details.name || '',
-              email: charge.billing_details.email || '',
-              phone: charge.billing_details.phone || '',
-              address: charge.billing_details.address.line1 || '',
-              city: charge.billing_details.address.city || '',
-              state: charge.billing_details.address.state || '',
-              zipCode: charge.billing_details.address.postal_code || '',
-              country: charge.billing_details.address.country || '',
-            },
-            create: {
-              orderId: order.id,
-              name: charge.billing_details.name || '',
-              email: charge.billing_details.email || '',
-              phone: charge.billing_details.phone || '',
-              address: charge.billing_details.address.line1 || '',
-              city: charge.billing_details.address.city || '',
-              state: charge.billing_details.address.state || '',
-              zipCode: charge.billing_details.address.postal_code || '',
-              country: charge.billing_details.address.country || '',
-            },
-          });
-        }
-        break;
-      }
-      case "payment_intent.payment_failed": {
-        const failedPayment = event.data.object
-        await updateOrderStatusByStripeSession(failedPayment.id, 'CANCELLED')
-        break
-      }
-      case "payment_intent.canceled": {
-        const canceledPayment = event.data.object
-        await updateOrderStatusByStripeSession(canceledPayment.id, 'CANCELLED')
-        break
-      }
-      case "charge.succeeded": {
-        const charge = event.data.object;
-        const paymentIntentId = charge.payment_intent;
-        logError('[WEBHOOK] charge.succeeded for paymentIntent: ' + String(paymentIntentId));
-        const updatedOrders = await prisma.order.updateMany({
-          where: { stripeSessionId: paymentIntentId },
-          data: {
-            status: 'PAID' as any,
-            customerEmail: charge.billing_details?.email || null,
-          },
-        });
-        // Upsert billing address for all matching orders
-        if (charge.billing_details?.address && updatedOrders.count > 0) {
-          const orders = await prisma.order.findMany({ where: { stripeSessionId: paymentIntentId } });
-          for (const order of orders) {
-            await prisma.billingAddress.upsert({
-              where: { orderId: order.id },
+
+      // Update the order status and billing address
+      const updatedOrder = await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          status: OrderStatus.PAID,
+          customerEmail: charge.billing_details.email || undefined,
+          updatedAt: new Date(),
+          billingAddress: {
+            upsert: {
+              create: {
+                name: charge.billing_details.name || '',
+                email: charge.billing_details.email || '',
+                phone: charge.billing_details.phone || '',
+                street: charge.billing_details.address?.line1 || '',
+                city: charge.billing_details.address?.city || '',
+                state: charge.billing_details.address?.state || '',
+                postalCode: charge.billing_details.address?.postal_code || '',
+                country: charge.billing_details.address?.country || 'US'
+              },
               update: {
                 name: charge.billing_details.name || '',
                 email: charge.billing_details.email || '',
                 phone: charge.billing_details.phone || '',
-                address: charge.billing_details.address.line1 || '',
-                city: charge.billing_details.address.city || '',
-                state: charge.billing_details.address.state || '',
-                zipCode: charge.billing_details.address.postal_code || '',
-                country: charge.billing_details.address.country || '',
-              },
-              create: {
-                orderId: order.id,
-                name: charge.billing_details.name || '',
-                email: charge.billing_details.email || '',
-                phone: charge.billing_details.phone || '',
-                address: charge.billing_details.address.line1 || '',
-                city: charge.billing_details.address.city || '',
-                state: charge.billing_details.address.state || '',
-                zipCode: charge.billing_details.address.postal_code || '',
-                country: charge.billing_details.address.country || '',
-              },
-            });
+                street: charge.billing_details.address?.line1 || '',
+                city: charge.billing_details.address?.city || '',
+                state: charge.billing_details.address?.state || '',
+                postalCode: charge.billing_details.address?.postal_code || '',
+                country: charge.billing_details.address?.country || 'US'
+              }
+            }
           }
+        },
+        include: {
+          billingAddress: true
         }
-        logError('[WEBHOOK] Order(s) updated: ' + String(updatedOrders.count));
-        break;
-      }
-      default:
-        logError('[WEBHOOK] Unhandled event type: ' + event.type)
+      });
+
+      console.log('[WEBHOOK] Order updated successfully:', {
+        orderId: updatedOrder.id,
+        status: updatedOrder.status,
+        paymentIntentId,
+        hasBillingAddress: !!updatedOrder.billingAddress
+      });
+
+      return NextResponse.json({ 
+        success: true,
+        orderId: updatedOrder.id,
+        status: updatedOrder.status
+      });
     }
 
-    return NextResponse.json({ received: true })
-  } catch (error) {
-    logError("Error processing webhook: " + (error instanceof Error ? error.message : String(error)))
-    // Log detailed error information
-    if (error instanceof Error) {
-      logError({
-        name: error.name,
-        message: error.message,
-        stack: error.stack,
-      })
+    if (event.type === 'payment_intent.succeeded') {
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      console.log('[WEBHOOK][DEBUG] Processing payment_intent.succeeded:', paymentIntent.id);
+
+      try {
+        // Try to find the order using multiple methods
+        let order = null;
+        
+        // First try by stripeSessionId
+        order = await prisma.order.findFirst({
+          where: { stripeSessionId: paymentIntent.id }
+        });
+        
+        // If not found, try by orderNumber from metadata
+        if (!order && paymentIntent.metadata?.orderNumber) {
+          order = await prisma.order.findFirst({
+            where: { orderNumber: paymentIntent.metadata.orderNumber }
+          });
+        }
+
+        // If still not found, try by orderId from metadata
+        if (!order && paymentIntent.metadata?.orderId) {
+          order = await prisma.order.findFirst({
+            where: { id: paymentIntent.metadata.orderId }
+          });
+        }
+
+        if (!order) {
+          console.log('[WEBHOOK] No order found for payment intent:', {
+            paymentIntentId: paymentIntent.id,
+            metadata: paymentIntent.metadata
+          });
+          return NextResponse.json({ 
+            error: 'Order not found',
+            details: 'Unable to match payment with an existing order'
+          }, { status: 404 });
+        }
+
+        // Update the order status
+        const updatedOrder = await prisma.order.update({
+          where: { id: order.id },
+          data: {
+            status: OrderStatus.PAID,
+            customerEmail: paymentIntent.receipt_email || undefined,
+            stripeSessionId: paymentIntent.id,
+            updatedAt: new Date()
+          }
+        });
+
+        console.log('[WEBHOOK] Order updated successfully:', {
+          orderId: updatedOrder.id,
+          status: updatedOrder.status,
+          paymentIntentId: paymentIntent.id
+        });
+
+        return NextResponse.json({ 
+          success: true,
+          orderId: updatedOrder.id,
+          status: updatedOrder.status
+        });
+      } catch (error) {
+        console.error('[WEBHOOK] Error processing payment_intent.succeeded:', error);
+        return NextResponse.json({ 
+          error: 'Failed to process payment intent',
+          details: error instanceof Error ? error.message : 'Unknown error'
+        }, { status: 500 });
+      }
     }
+
+    return NextResponse.json({ received: true });
+  } catch (err) {
+    console.error('[WEBHOOK] Error:', err);
     return NextResponse.json(
-      {
-        error: "Webhook handler failed",
-        message: error instanceof Error ? error.message : String(error),
-      },
+      { error: err instanceof Error ? err.message : 'Webhook error' },
       { status: 400 }
-    )
+    );
   }
 } 

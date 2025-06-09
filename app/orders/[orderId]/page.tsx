@@ -18,12 +18,12 @@ interface OrderItem {
 interface Address {
   name: string;
   email: string;
-  address: string;
+  phone: string;
+  street: string;
   city: string;
   state: string;
-  zipCode: string;
-  country?: string;
-  phone?: string;
+  postalCode: string;
+  country: string;
 }
 
 interface Order {
@@ -112,6 +112,10 @@ export default async function OrderDetailsPage({ params }: { params: Promise<{ o
                 Order Date: {new Date(order.createdAt).toLocaleDateString()}
               </p>
             </div>
+            <div>
+              <p className="text-sm font-medium text-gray-500">Payment Status</p>
+              <p className="mt-1 text-sm text-gray-900">{['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(order.status) ? 'Paid' : 'Pending'}</p>
+            </div>
           </div>
         </div>
         <div className="bg-white shadow rounded-lg p-6">
@@ -138,9 +142,9 @@ export default async function OrderDetailsPage({ params }: { params: Promise<{ o
               <div>
                 <p className="text-sm font-medium text-gray-500">Address</p>
                 <p className="mt-1 text-sm text-gray-900">
-                  {order.shippingAddress.address}
+                  {order.shippingAddress.street}
                   <br />
-                  {order.shippingAddress.city}, {order.shippingAddress.state} {order.shippingAddress.zipCode}
+                  {order.shippingAddress.city}, {order.shippingAddress.state} {order.shippingAddress.postalCode}
                   <br />
                   {order.shippingAddress.country}
                 </p>
@@ -165,9 +169,9 @@ export default async function OrderDetailsPage({ params }: { params: Promise<{ o
               <div>
                 <p className="text-sm font-medium text-gray-500">Address</p>
                 <p className="mt-1 text-sm text-gray-900">
-                  {order.billingAddress.address}
+                  {order.billingAddress.street}
                   <br />
-                  {order.billingAddress.city}, {order.billingAddress.state} {order.billingAddress.zipCode}
+                  {order.billingAddress.city}, {order.billingAddress.state} {order.billingAddress.postalCode}
                   <br />
                   {order.billingAddress.country}
                 </p>

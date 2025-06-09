@@ -9,6 +9,10 @@ interface OrderItem {
 }
 
 interface Address {
+  id?: string;
+  name: string;
+  email: string;
+  phone?: string;
   street: string;
   city: string;
   state: string;
@@ -17,25 +21,27 @@ interface Address {
 }
 
 interface BillingAddress {
+  id?: string;
   name: string;
   email: string;
-  address: string;
+  phone?: string;
+  street: string;
   city: string;
   state: string;
-  zipCode: string;
+  postalCode: string;
   country: string;
 }
 
 interface Order {
   id: string;
-  userId: string;
-  items: OrderItem[];
+  orderNumber: string;
   status: 'PENDING' | 'PROCESSING' | 'SHIPPED' | 'DELIVERED' | 'CANCELLED';
   total: number;
   shippingAddress: Address;
   billingAddress: BillingAddress;
-  createdAt: string;
-  updatedAt: string;
+  items: OrderItem[];
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 interface OrderContextType {

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getStripeInstance, getStripeConfig } from '@/lib/stripe-server';
-import { env } from '@/lib/env';
 
 type HealthStatus = {
   stripe: boolean;

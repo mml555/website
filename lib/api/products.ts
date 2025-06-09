@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import type { Product } from '@/types/product'
-import { decimalToNumber } from '@/lib/utils'
+import { decimalToNumber } from '@/lib/AppUtils'
 
 interface DbProduct {
   id: string

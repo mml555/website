@@ -2,20 +2,12 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo, ReactNode } from "react";
 import { useSession } from "next-auth/react";
 import debounce from 'lodash/debounce';
-import { handleApiError } from '../lib/utils';
+import { handleApiError } from '@/lib/AppUtils';
 import type { CartItem } from '../types/product';
 import {
-  generateCartItemId,
-  syncWithRetry,
-  validateStockBeforeSync,
-  persistCartState,
   loadCartState,
-  resolveCartConflicts,
   validateCartItem,
-  compressCartData,
-  decompressCartData,
-  cartQueue,
-  type CartState
+  cartQueue
 } from '../lib/cart-utils';
 import { useRouter } from "next/navigation";
 import { toast } from "react-hot-toast";
@@ -45,6 +37,13 @@ export interface CartContextType {
     retrySync: () => Promise<void>;
     pendingChanges: CartItem[];
     cartExpiryWarning: string | null;
+    // Cart sharing methods
+    generateShareableCartLink: () => Promise<string | null>;
+    loadSharedCart: (shareId: string) => Promise<boolean>;
+    // Save for later
+    savedForLater: CartItem[];
+    moveToSaveForLater: (id: string, variantId?: string) => void;
+    moveToCartFromSaveForLater: (id: string, variantId?: string) => void;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -105,6 +104,8 @@ function mergeCarts(localItems: CartItem[], serverItems: CartItem[]): CartItem[]
 }
 
 export function CartProvider({ children }: CartProviderProps) {
+    // TODO: Add cart sharing logic (UI, API integration)
+    // TODO: Add save for later logic (UI, state management, persistence)
     const { data: session, status } = useSession();
     const [items, setItems] = useState<CartItem[]>([]);
     const [total, setTotal] = useState(0);
@@ -135,6 +136,8 @@ export function CartProvider({ children }: CartProviderProps) {
     const lastSyncTimeRef = useRef<number>(0);
     // Guest cart expiry warning
     const [cartExpiryWarning, setCartExpiryWarning] = useState<string | null>(null);
+    // --- Save for Later ---
+    const [savedForLater, setSavedForLater] = useState<CartItem[]>([]);
 
     // --- Mutation queue for atomic cart updates ---
     const mutationQueue = useRef<(() => Promise<void>)[]>([]);
@@ -150,10 +153,10 @@ export function CartProvider({ children }: CartProviderProps) {
             });
         }
     }, []);
-    function enqueueMutation(fn: () => Promise<void>) {
+    const enqueueMutation = useCallback((fn: () => Promise<void>) => {
         mutationQueue.current.push(fn);
         runNextMutation();
-    }
+    }, [runNextMutation]);
 
     // Keep itemsRef in sync with items state
     useEffect(() => {
@@ -230,6 +233,7 @@ export function CartProvider({ children }: CartProviderProps) {
     const syncCart = useCallback(async (itemsToSync: CartItem[]) => {
         if (rateLimitCooldown) {
             setError("You're making changes too quickly. Please wait a moment and try again.");
+            toast.error("You're making changes too quickly. Please wait a moment and try again.");
             return;
         }
         try {
@@ -268,6 +272,7 @@ export function CartProvider({ children }: CartProviderProps) {
             if (!response.ok) {
                 if (response.status === 429) {
                     setError("You're making changes too quickly. Please wait a moment and try again.");
+                    toast.error("You're making changes too quickly. Please wait a moment and try again.");
                     setRateLimitCooldown(true);
                     if (cooldownTimeoutRef.current) clearTimeout(cooldownTimeoutRef.current);
                     cooldownTimeoutRef.current = setTimeout(() => {
@@ -276,11 +281,14 @@ export function CartProvider({ children }: CartProviderProps) {
                     }, RATE_LIMIT_COOLDOWN_MS);
                     return;
                 }
-                // Defensive: handle 404 with missingProducts
                 if (response.status === 404) {
-                    const errorBody = await response.json();
+                    let errorBody: any = {};
+                    try {
+                        errorBody = await response.json();
+                    } catch {
+                        errorBody = {};
+                    }
                     if (errorBody && Array.isArray(errorBody.missingProducts) && errorBody.missingProducts.length > 0) {
-                        // Remove missing products from cart
                         const remainingItems = items.filter(item => !errorBody.missingProducts.includes(item.productId));
                         setItems(remainingItems);
                         setPendingChanges([]);
@@ -290,9 +298,15 @@ export function CartProvider({ children }: CartProviderProps) {
                         return;
                     }
                 }
-                // Log error response for debugging
-                const errorBody = await response.text();
-                throw new AppError('Failed to sync cart', response.status);
+                let errorText = '';
+                try {
+                    errorText = await response.text();
+                } catch {
+                    errorText = 'Unknown error';
+                }
+                setError('Failed to sync cart: ' + errorText);
+                toast.error('Failed to sync cart: ' + errorText);
+                throw new AppError(errorText || 'Failed to sync cart', response.status);
             }
 
             const data = await response.json() as { items?: CartItem[] };
@@ -307,7 +321,7 @@ export function CartProvider({ children }: CartProviderProps) {
         } catch (err: any) {
             console.error('Failed to sync cart:', err);
             setError(err instanceof Error ? err.message : 'Failed to sync cart');
-            // Only add to pendingChanges if not a 400/404 error
+            toast.error(err instanceof Error ? err.message : 'Failed to sync cart');
             const isClientError = typeof err === 'object' && err !== null && 'status' in err && (err.status === 400 || err.status === 404);
             if (!isClientError) {
                 setPendingChanges(prev => [...prev, ...itemsToSync]);
@@ -382,50 +396,20 @@ export function CartProvider({ children }: CartProviderProps) {
         }
         try {
             userInitiatedRef.current = true;
-            const itemToUpdate = items.find(item => item.id === id && (!variantId || item.variantId === variantId));
-            if (!itemToUpdate) return;
-
-            const intendedQuantity = quantity;
-
-            // Stock validation API call for single item
-            try {
-                const response = await fetch('/api/cart/validate-stock', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ productId: itemToUpdate.productId, variantId: itemToUpdate.variantId, quantity: intendedQuantity }),
+            let updatedItems;
+            if (quantity === 0) {
+                updatedItems = items.filter(item => !(item.id === id && (!variantId || item.variantId === variantId)));
+            } else {
+                updatedItems = items.map(item => {
+                    if (item.id === id && (!variantId || item.variantId === variantId)) {
+                        return { ...item, quantity };
+                    }
+                    return item;
                 });
-                if (!response.ok) {
-                    setError('Failed to check stock');
-                    return;
-                }
-                const data = await response.json();
-                let stock = null;
-                if (Array.isArray(data) && data.length > 0) {
-                    stock = data[0].stock;
-                } else if (data && typeof data.stock === 'number') {
-                    stock = data.stock;
-                }
-                if (typeof stock === 'number' && intendedQuantity > stock) {
-                    setError(`Only ${stock} items available in stock for "${itemToUpdate.name}"`);
-                    return;
-                }
-            } catch (err) {
-                setError('Failed to check stock');
-                return;
             }
-
-            // Only build and set updatedItems if stock check passes
-            const updatedItems = items.map(item => {
-                if (item.id === id && (!variantId || item.variantId === variantId)) {
-                    return { ...item, quantity };
-                }
-                return item;
-            });
-
             setItems(Array.isArray(updatedItems) ? updatedItems : []);
             persistCartState(Array.isArray(updatedItems) ? updatedItems : [], Array.isArray(pendingChanges) ? pendingChanges : []);
             debouncedSyncCart(Array.isArray(updatedItems) ? updatedItems : []);
-
             if (session?.user) {
                 syncCart(updatedItems);
             }
@@ -443,42 +427,12 @@ export function CartProvider({ children }: CartProviderProps) {
         }
         try {
             userInitiatedRef.current = true;
-            const newId = item.variantId ? `${item.productId}-${item.variantId}` : item.productId;
             const safeItems = Array.isArray(items) ? items : [];
+            // Use both id and variantId for uniqueness
             const existingItemIndex = safeItems.findIndex(
                 i => i.productId === item.productId && i.variantId === item.variantId
             );
-            let intendedQuantity = quantity;
-            if (existingItemIndex >= 0) {
-                intendedQuantity = safeItems[existingItemIndex].quantity + quantity;
-            }
-            // Stock validation API call for single item
-            try {
-                const response = await fetch('/api/cart/validate-stock', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ productId: item.productId, variantId: item.variantId, quantity: intendedQuantity }),
-                });
-                if (!response.ok) {
-                    setError('Failed to check stock');
-                    return;
-                }
-                const data = await response.json();
-                let stock = null;
-                if (Array.isArray(data) && data.length > 0) {
-                    stock = data[0].stock;
-                } else if (data && typeof data.stock === 'number') {
-                    stock = data.stock;
-                }
-                if (typeof stock === 'number' && intendedQuantity > stock) {
-                    setError(`Only ${stock} items available in stock for "${item.name}"`);
-                    return;
-                }
-            } catch (err) {
-                setError('Failed to check stock');
-                return;
-            }
-            // If stock check passes, proceed to add/update item
+            const newId = item.variantId ? `${item.productId}-${item.variantId}` : item.productId;
             const newItem: CartItem = {
                 id: newId,
                 productId: item.productId,
@@ -544,7 +498,7 @@ export function CartProvider({ children }: CartProviderProps) {
                 }
             });
         });
-    }, [addItem]);
+    }, [addItem, enqueueMutation]);
     const atomicUpdateQuantity = useCallback(async (id: string, quantity: number, variantId?: string) => {
         return new Promise<void>((resolve, reject) => {
             enqueueMutation(async () => {
@@ -556,7 +510,7 @@ export function CartProvider({ children }: CartProviderProps) {
                 }
             });
         });
-    }, [updateQuantity]);
+    }, [updateQuantity, enqueueMutation]);
     const atomicRemoveItem = useCallback(async (id: string, variantId?: string) => {
         return new Promise<void>((resolve, reject) => {
             enqueueMutation(async () => {
@@ -568,7 +522,7 @@ export function CartProvider({ children }: CartProviderProps) {
                 }
             });
         });
-    }, [removeItem]);
+    }, [removeItem, enqueueMutation]);
 
     // Helper to clear cart state and localStorage
     const clearCartAndStorage = useCallback(() => {
@@ -584,8 +538,17 @@ export function CartProvider({ children }: CartProviderProps) {
     const clearCart = useCallback(() => {
         userInitiatedRef.current = true;
         clearCartAndStorage();
-        debouncedSyncCart([]);
-    }, [clearCartAndStorage, debouncedSyncCart]);
+        if (status === 'authenticated') {
+            debouncedSyncCart([]);
+        } else if (guestId) {
+            // For guest users, also clear the guest cart from Redis
+            fetch('/api/cart/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ guestId }),
+            }).catch(console.error);
+        }
+    }, [clearCartAndStorage, debouncedSyncCart, status, guestId]);
 
     // Auto-clear error after 5 seconds unless cleared manually
     useEffect(() => {
@@ -642,6 +605,88 @@ export function CartProvider({ children }: CartProviderProps) {
         return () => clearInterval(interval);
     }, [isClient, status]);
 
+    // --- Cart Sharing ---
+    const generateShareableCartLink = useCallback(async (): Promise<string | null> => {
+        if (!items || items.length === 0) {
+            setError('Cannot share an empty cart.');
+            return null;
+        }
+        try {
+            // Placeholder: POST to /api/cart/share with cart items
+            const res = await fetch('/api/cart/share', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items }),
+            });
+            if (!res.ok) throw new Error('Failed to generate shareable link');
+            const data = await res.json();
+            return data.shareId ? `${window.location.origin}/cart/shared/${data.shareId}` : null;
+        } catch (err) {
+            setError('Failed to generate shareable cart link.');
+            return null;
+        }
+    }, [items]);
+
+    const loadSharedCart = useCallback(async (shareId: string): Promise<boolean> => {
+        try {
+            // Placeholder: GET from /api/cart/share/[shareId]
+            const res = await fetch(`/api/cart/share/${shareId}`);
+            if (!res.ok) throw new Error('Invalid or expired cart link');
+            const data = await res.json();
+            if (data && Array.isArray(data.items)) {
+                setItems(data.items);
+                persistCartState(data.items, []);
+                return true;
+            }
+            return false;
+        } catch (err) {
+            setError('Failed to load shared cart.');
+            return false;
+        }
+    }, [persistCartState]);
+
+    // Load savedForLater from localStorage on mount
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            const raw = localStorage.getItem('savedForLater');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) setSavedForLater(parsed);
+            }
+        } catch {}
+    }, []);
+
+    // Persist savedForLater to localStorage
+    useEffect(() => {
+        if (!isClient) return;
+        try {
+            localStorage.setItem('savedForLater', JSON.stringify(savedForLater));
+        } catch {}
+    }, [savedForLater, isClient]);
+
+    // Move item from cart to save for later
+    const moveToSaveForLater = useCallback((id: string, variantId?: string) => {
+        setItems(prev => {
+            const idx = prev.findIndex(item => item.id === id && (!variantId || item.variantId === variantId));
+            if (idx === -1) return prev;
+            const item = prev[idx];
+            setSavedForLater(sfl => [...sfl, item]);
+            return prev.filter((_, i) => i !== idx);
+        });
+    }, []);
+
+    // Move item from save for later to cart
+    const moveToCartFromSaveForLater = useCallback((id: string, variantId?: string) => {
+        setSavedForLater(prev => {
+            const idx = prev.findIndex(item => item.id === id && (!variantId || item.variantId === variantId));
+            if (idx === -1) return prev;
+            const item = prev[idx];
+            setItems(items => [...items, item]);
+            return prev.filter((_, i) => i !== idx);
+        });
+    }, []);
+
     const value = useMemo(
         () => ({
             items,
@@ -656,9 +701,14 @@ export function CartProvider({ children }: CartProviderProps) {
             isLoading,
             retrySync,
             pendingChanges,
-            cartExpiryWarning
+            cartExpiryWarning,
+            generateShareableCartLink,
+            loadSharedCart,
+            savedForLater,
+            moveToSaveForLater,
+            moveToCartFromSaveForLater,
         }),
-        [items, atomicAddItem, atomicRemoveItem, atomicUpdateQuantity, clearCart, total, itemCount, error, clearError, isLoading, retrySync, pendingChanges, cartExpiryWarning]
+        [items, atomicAddItem, atomicRemoveItem, atomicUpdateQuantity, clearCart, total, itemCount, error, clearError, isLoading, retrySync, pendingChanges, cartExpiryWarning, generateShareableCartLink, loadSharedCart, savedForLater, moveToSaveForLater, moveToCartFromSaveForLater]
     );
 
     // On login, merge guest and server cart, sync merged cart (only on transition)

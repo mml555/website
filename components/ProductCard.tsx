@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Product } from '@/types/product';
-import { formatPrice } from '../lib/utils';
+import { formatPrice } from '@/lib/AppUtils';
 import Link from 'next/link';
 import Image from 'next/image';
 import AddToCartButton from './product/AddToCartButton';
@@ -82,15 +82,18 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, index }) => {
             userId={session?.user?.id}
             simple={true}
           />
-          {isAdmin && (
+        </div>
+        {isAdmin && (
+          <div className="mt-2">
             <Link
               href={`/dashboard/products/${product.id}`}
-              className="block w-full text-center text-xs font-medium text-gray-600 hover:text-gray-900 transition-colors duration-200"
+              className="block w-full text-center text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded py-2 transition-colors duration-200"
+              style={{ position: 'relative', zIndex: 10 }}
             >
               Edit Product
             </Link>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

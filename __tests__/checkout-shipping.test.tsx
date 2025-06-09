@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import ShippingPage from '../app/checkout/shipping/page';
 import React from 'react';
 import { CartProvider } from '../lib/cart';
@@ -86,7 +86,7 @@ describe('ShippingPage', () => {
     const street = screen.getByLabelText(/Street Address/i);
     const city = screen.getByLabelText(/City/i);
     const state = screen.getByLabelText(/^State$/i);
-    const zip = screen.getByLabelText(/ZIP Code/i);
+    const postalCode = screen.getByLabelText(/Postal Code/i);
     await act(async () => {
       fireEvent.change(street, { target: { value: '123 Main' } });
       fireEvent.blur(street);
@@ -100,8 +100,8 @@ describe('ShippingPage', () => {
     await act(async () => {
       fireEvent.change(county, { target: { value: 'Los Angeles' } });
       fireEvent.blur(county);
-      fireEvent.change(zip, { target: { value: '90001' } });
-      fireEvent.blur(zip);
+      fireEvent.change(postalCode, { target: { value: '90001' } });
+      fireEvent.blur(postalCode);
     });
     expect(await screen.findByRole('radio', { name: /Express/ })).toBeInTheDocument();
   });

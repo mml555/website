@@ -1,6 +1,3 @@
-import { render, screen, fireEvent } from '@testing-library/react';
-import CartPage from '../app/cart/page';
-import CheckoutPage from '../app/checkout/page';
 
 describe('Cart & Checkout Integration', () => {
   it('should add, update, and remove items from the cart', async () => {

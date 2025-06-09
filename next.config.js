@@ -45,10 +45,6 @@ const nextConfig = {
       },
       {
         protocol: 'https',
-        hostname: 'via.placeholder.com',
-      },
-      {
-        protocol: 'https',
         hostname: 'placehold.co',
       },
       {
@@ -62,7 +58,6 @@ const nextConfig = {
     minimumCacheTTL: 60,
     dangerouslyAllowSVG: true,
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
-    domains: ['via.placeholder.com', 'picsum.photos'],
   },
   // Server external packages (moved from experimental)
   serverExternalPackages: ['@prisma/client', 'bcryptjs'],
@@ -156,19 +151,20 @@ const nextConfig = {
       }
     }
 
-    if (!isServer) {
-      config.watchOptions = {
-        ...config.watchOptions,
-        poll: 1000,
-        aggregateTimeout: 300,
-      };
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        net: false,
-        tls: false,
-      };
-    }
+    // Removed polling for local development to prevent excessive recompiles and improve performance
+    // if (!isServer) {
+    //   config.watchOptions = {
+    //     ...config.watchOptions,
+    //     poll: 1000,
+    //     aggregateTimeout: 300,
+    //   };
+    //   config.resolve.fallback = {
+    //     ...config.resolve.fallback,
+    //     fs: false,
+    //     net: false,
+    //     tls: false,
+    //   };
+    // }
 
     // Handle OpenTelemetry instrumentation warnings
     config.module.rules.push({

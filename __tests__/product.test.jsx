@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { act } from 'react';
-import { decimalToNumber } from '@/lib/utils';
+import { decimalToNumber } from '@/lib/AppUtils';
 import ProductCard from '@/components/ProductCard';
 import { CartProvider } from '@/lib/cart';
 beforeAll(() => {

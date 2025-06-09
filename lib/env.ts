@@ -45,6 +45,8 @@ class EnvError extends Error {
 // Hard guard: Never access process.env directly on the client
 const isClient = typeof window !== 'undefined';
 
+export const nodeEnv = process.env.NODE_ENV || 'test';
+
 if (isClient) {
   // @ts-ignore
   if (typeof process !== 'undefined' && process.env) {
@@ -68,13 +70,13 @@ function assertEnvVar(key: keyof typeof process.env): string {
 // Debug logging for environment variables
 if (!isClient) {
   // Add detailed logging for client environment variables
-  console.log('Client Environment Variables:', {
-    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
-    NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL,
-    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
-    NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
-  })
+  // console.log('Client Environment Variables:', {
+  //   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+  //   NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+  //   NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL,
+  //   NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+  //   NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
+  // })
 }
 
 // Server-side environment variables with enhanced validation
@@ -162,7 +164,7 @@ if (!_env.success && !isClient) {
   
   if (missingVars.length > 0) {
     const errorMessage = `Missing required environment variables: ${missingVars.join(', ')}. Please check your .env file and environment configuration.`
-    console.error(errorMessage)
+    // console.error(errorMessage)
     
     // Only throw error in production
     if (process.env.NODE_ENV === 'production') {
@@ -177,12 +179,12 @@ if (!_clientEnv.success && isClient) {
     key => !clientVars[key]
   );
   if (missingVars.length > 0) {
-    const isProduction = process.env.NODE_ENV === 'production'
+    const isProduction = nodeEnv === 'production'
     const message = isProduction
       ? `Missing required client environment variables: ${missingVars.join(', ')}. Please check your environment configuration.`
       : `Missing client environment variables in development: ${missingVars.join(', ')}. These are only required in production.\nThis warning is informational and does not block app startup.`
     if (isProduction) {
-      console.error(message)
+      // console.error(message)
       throw new EnvError(message)
     } else {
       // Only warn if something is actually missing
@@ -215,9 +217,9 @@ export function validateEnv() {
   const missingVars = requiredServerVars.filter(key => !process.env[key])
   
   if (missingVars.length > 0) {
-    console.error(
-      `Missing required environment variables: ${missingVars.join(', ')}. Please check your .env file and environment configuration.`
-    )
+    // console.error(
+    //   `Missing required environment variables: ${missingVars.join(', ')}. Please check your .env file and environment configuration.`
+    // )
     return false
   }
 
@@ -244,10 +246,16 @@ if (process.env.NODE_ENV === 'development' && typeof global !== 'undefined') {
     }
     if (hasEnv(value)) {
       // eslint-disable-next-line no-console
-      console.error('[DEV] Serializing object with nested .env property:', value);
+      // console.error('[DEV] Serializing object with nested .env property:', value);
       // eslint-disable-next-line no-console
-      console.trace('[DEV] Serialization stack trace');
+      // console.trace('[DEV] Serialization stack trace');
     }
     return origStringify.call(this, value, replacer, space);
   };
+}
+
+const isProduction = nodeEnv === 'production'
+
+if (nodeEnv === 'development' && typeof global !== 'undefined') {
+  // ... existing code ...
 }

@@ -4,6 +4,17 @@ export const dynamic = 'force-dynamic'
 
 import ResetPasswordForm from 'components/auth/ResetPasswordForm'
 import Link from "next/link"
+import { Suspense } from 'react'
+
+function ResetPasswordFormSection() {
+  return (
+    <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+      <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
+        <ResetPasswordForm />
+      </div>
+    </div>
+  )
+}
 
 export default function ResetPasswordPage() {
   return (
@@ -22,12 +33,9 @@ export default function ResetPasswordPage() {
           </Link>
         </p>
       </div>
-
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
-          <ResetPasswordForm />
-        </div>
-      </div>
+      <Suspense>
+        <ResetPasswordFormSection />
+      </Suspense>
     </div>
   )
 } 

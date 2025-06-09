@@ -1,12 +1,9 @@
-import { NextAuthOptions } from "next-auth"
 import { PrismaAdapter } from "@next-auth/prisma-adapter"
 import CredentialsProvider from "next-auth/providers/credentials"
 import { prisma } from '@/lib/prisma'
-import { JWT } from "next-auth/jwt"
-import { Session } from "next-auth"
-import bcrypt from "bcryptjs"
 import { RateLimit } from "@/lib/rate-limit"
-import { compare } from "bcryptjs"
+import bcrypt, { compare } from "bcryptjs"
+import { AuthOptions } from "next-auth"
 
 // Create a rate limiter with more lenient limits
 const loginLimiter = new RateLimit({
@@ -56,7 +53,7 @@ function validateEnv() {
 // Call validation on import
 validateEnv()
 
-export const authOptions: NextAuthOptions = {
+export const authOptions: AuthOptions = {
   adapter: PrismaAdapter(prisma),
   providers: [
     CredentialsProvider({
@@ -118,7 +115,7 @@ export const authOptions: NextAuthOptions = {
     error: "/login", // Redirect to login page on error
   },
   session: {
-    strategy: "jwt",
+    strategy: "jwt" as const,
     maxAge: 30 * 24 * 60 * 60, // 30 days
     updateAge: 24 * 60 * 60, // 24 hours
   },
@@ -127,7 +124,8 @@ export const authOptions: NextAuthOptions = {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt(args: { token: any; user: any }) {
+      const { token, user } = args;
       if (user) {
         return {
           ...token,
@@ -137,7 +135,7 @@ export const authOptions: NextAuthOptions = {
       }
       return token
     },
-    async session({ session, token }: { session: Session; token: JWT }) {
+    async session({ session, token }: { session: any; token: any }) {
       if (token) {
         return {
           ...session,

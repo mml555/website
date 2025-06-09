@@ -1,0 +1,33 @@
+name: Coverage Badge
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-and-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run test:coverage
+      - name: Run API integration tests
+        run: npm run test:api
+      - name: Generate and upload coverage badge
+        uses: jakejarvis/jest-coverage-report-github-action@v1.2.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gist-token: ${{ secrets.GIST_TOKEN }}
+          gist-id: ${{ secrets.GIST_ID }}
+          badge-label: 'coverage'
+          badge-color: 'brightgreen'
+
+# Instructions:
+# 1. Create a gist on GitHub to store the badge JSON (empty file, e.g. coverage-badge.json).
+# 2. Add the GIST_ID (the gist hash) and GIST_TOKEN (a GitHub token with gist scope) as repository secrets.
+# 3. Update the badge URL in README.md to point to your gist. 

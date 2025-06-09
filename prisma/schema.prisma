@@ -30,6 +30,7 @@ model User {
   image             String?
   isGuest           Boolean   @default(false)
   userAddresses     UserAddress[]
+  auditLogs         AuditLog[]
 
   @@index([email])
   @@index([role])
@@ -186,6 +187,7 @@ model Order {
   billingAddress BillingAddress? @relation("BillingAddress")
   stripeSessionId String?   @unique // Added for Stripe session tracking
   customerEmail   String?         // Added for storing customer email
+  shippingRate    Decimal?  @db.Decimal(10, 2) // Added for shipping rate
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -213,6 +215,9 @@ model Address {
   id            String   @id @default(cuid())
   order         Order    @relation(fields: [orderId], references: [id])
   orderId       String   @unique
+  name          String
+  email         String
+  phone         String?
   street        String
   city          String
   state         String
@@ -226,10 +231,10 @@ model BillingAddress {
   id        String   @id @default(cuid())
   name      String
   email     String
-  address   String
+  street    String
   city      String
   state     String
-  zipCode   String
+  postalCode String
   country   String?
   phone     String?
   orderId   String   @unique
@@ -303,15 +308,24 @@ model UserAddress {
   name      String
   email     String
   phone     String?
-  address   String
+  street    String
   city      String
   state     String
-  zipCode   String
+  postalCode String
   country   String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  details   String
+  createdAt DateTime @default(now())
 }
 
 enum Role {

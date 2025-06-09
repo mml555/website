@@ -1,2 +1,17 @@
 // DEPRECATED: Do NOT import this file. Use 'lib/stripe-client.ts' for client code and 'lib/stripe-server.ts' for server code.
 // This file is kept for reference only and should not be imported. 
+
+import Stripe from 'stripe'
+
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error('Missing STRIPE_SECRET_KEY')
+}
+
+export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2023-10-16',
+  typescript: true,
+})
+
+export function getStripe() {
+  return stripe
+} 

@@ -1,7 +1,7 @@
 /**
  * @jest-environment node
  */
-import { prisma } from '../lib/db'
+import { prisma } from '../lib/prisma'
 
 describe('Wishlist functionality', () => {
   beforeEach(async () => {

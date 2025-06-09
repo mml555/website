@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { z } from 'zod'
-import { decimalToNumber } from '@/lib/utils'
+import { OrderStatus } from '@prisma/client'
 
 // Define the schema for order items
 const orderItemSchema = z.object({
@@ -23,12 +23,12 @@ const orderItemSchema = z.object({
 const addressSchema = z.object({
   name: z.string(),
   email: z.string().email(),
-  address: z.string(),
+  phone: z.string().optional(),
+  street: z.string(),
   city: z.string(),
   state: z.string(),
-  zipCode: z.string(),
-  country: z.string().optional(),
-  phone: z.string().optional(),
+  postalCode: z.string(),
+  country: z.string()
 })
 
 // Define the schema for the order
@@ -38,22 +38,29 @@ const orderSchema = z.object({
   status: z.enum(['PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED']),
   createdAt: z.string().datetime(),
   user: z.object({
-    name: z.string(),
-    email: z.string().email(),
-  }),
+    name: z.string().optional(),
+    email: z.string().email().optional(),
+  }).optional(),
   items: z.array(orderItemSchema),
   shippingAddress: addressSchema.optional(),
   billingAddress: addressSchema.optional(),
+  orderNumber: z.string().optional(),
 })
 
 // Helper function to convert price to number
 function convertPriceToNumber(price: any): number {
-  if (typeof price === 'number') return price
-  if (typeof price === 'string') return parseFloat(price)
+  if (typeof price === 'number') return Math.max(0, price)
+  if (typeof price === 'string') {
+    const parsed = parseFloat(price)
+    return isNaN(parsed) ? 0 : Math.max(0, parsed)
+  }
   if (price && typeof price === 'object') {
-    if (typeof price.toNumber === 'function') return price.toNumber()
-    if (typeof price.toString === 'function') return parseFloat(price.toString())
-    if (price.amount) return price.amount
+    if (typeof price.toNumber === 'function') return Math.max(0, price.toNumber())
+    if (typeof price.toString === 'function') {
+      const parsed = parseFloat(price.toString())
+      return isNaN(parsed) ? 0 : Math.max(0, parsed)
+    }
+    if (price.amount) return Math.max(0, price.amount)
   }
   return 0
 }
@@ -65,26 +72,17 @@ function convertPriceToNumber(price: any): number {
 export async function GET(request: NextRequest, context: { params: Promise<{ orderId: string }> }) {
   const { orderId } = await context.params;
   try {
-    const session = await getServerSession(authOptions)
-
-    if (!session?.user) {
-      return NextResponse.json(
-        { message: "Unauthorized" },
-        { status: 401 }
-      )
-    }
-
     if (!orderId) {
+      console.error('[OrderAPI] Missing orderId', { orderId })
       return NextResponse.json(
         { message: "Order ID is required" },
         { status: 400 }
       )
     }
 
+    // Fetch the order first
     const order = await prisma.order.findUnique({
-      where: {
-        id: orderId,
-      },
+      where: { id: orderId },
       include: {
         items: {
           include: {
@@ -112,139 +110,66 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
     }) as any;
 
     if (!order) {
+      console.error('[OrderAPI] Order not found', { orderId })
       return NextResponse.json(
         { message: "Order not found" },
         { status: 404 }
       )
     }
 
-    // Allow guest users to access their own orders without authentication
-    if (order.user?.isGuest === true) {
-      // ... existing order processing and validation ...
-      const processedOrder = {
-        ...order,
-        total: convertPriceToNumber(order.total) || 0,
-        status: order.status as any || 'PENDING',
-        createdAt: order.createdAt ? order.createdAt.toISOString() : new Date().toISOString(),
-        user: {
-          name: order.user?.name || '',
-          email: order.user?.email || '',
-        },
-        items: order.items.map((item: any) => ({
-          ...item,
-          price: convertPriceToNumber(item.price) || 0,
-          product: {
-            ...item.product,
-            price: convertPriceToNumber(item.product.price) || 0,
-            image: (item.product.images && item.product.images[0]) || 'https://via.placeholder.com/400',
-          },
-        })),
-        shippingAddress: order.shippingAddress
-          ? {
-              name: order.shippingAddress.name || '',
-              email: order.shippingAddress.email || order.user?.email || '',
-              address: order.shippingAddress.street || '',
-              city: order.shippingAddress.city || '',
-              state: order.shippingAddress.state || '',
-              zipCode: order.shippingAddress.postalCode || '',
-              country: order.shippingAddress.country || '',
-              phone: order.shippingAddress.phone || '',
-            }
-          : undefined,
-        billingAddress: order.billingAddress
-          ? {
-              name: order.billingAddress.name || '',
-              email: order.billingAddress.email || '',
-              address: order.billingAddress.address || '',
-              city: order.billingAddress.city || '',
-              state: order.billingAddress.state || '',
-              zipCode: order.billingAddress.zipCode || '',
-              country: order.billingAddress.country || '',
-              phone: order.billingAddress.phone || '',
-            }
-          : undefined,
-        orderNumber: order.orderNumber || '',
-      }
-      // Validate the order data against the schema
-      const validatedOrder = orderSchema.safeParse(processedOrder)
-      if (!validatedOrder.success) {
-        console.error("Order validation failed:", validatedOrder.error)
-        return NextResponse.json(
-          { 
-            message: "Invalid order data",
-            errors: validatedOrder.error.errors,
-            zodError: validatedOrder.error,
-          },
-          { status: 422 }
-        )
-      }
-      return NextResponse.json(validatedOrder.data)
-    }
-
-    // Check if user is authorized to view this order
-    if (session.user.role !== "ADMIN" && order.userId !== session.user.id) {
-      return NextResponse.json(
-        { message: "Forbidden: You can only view your own orders" },
-        { status: 403 }
-      )
-    }
-
-    // Future-proof: fallback for required fields
+    // Process and validate the order data
     const processedOrder = {
       ...order,
       total: convertPriceToNumber(order.total) || 0,
-      status: order.status as any || 'PENDING',
+      status: order.status || 'PENDING',
       createdAt: order.createdAt ? order.createdAt.toISOString() : new Date().toISOString(),
-      user: {
-        name: order.user?.name || '',
-        email: order.user?.email || '',
-      },
+      user: order.user ? {
+        name: order.user.name || '',
+        email: order.user.email || '',
+      } : undefined,
       items: order.items.map((item: any) => ({
         ...item,
         price: convertPriceToNumber(item.price) || 0,
         product: {
           ...item.product,
           price: convertPriceToNumber(item.product.price) || 0,
-          image: item.product.image || 'https://via.placeholder.com/400',
+          image: (item.product.images && item.product.images[0]) || 'https://picsum.photos/400',
         },
       })),
       shippingAddress: order.shippingAddress
         ? {
-            name: order.shippingAddress.name || '',
-            email: order.shippingAddress.email || order.user?.email || '',
-            address: order.shippingAddress.street || '',
-            city: order.shippingAddress.city || '',
-            state: order.shippingAddress.state || '',
-            zipCode: order.shippingAddress.postalCode || '',
-            country: order.shippingAddress.country || '',
-            phone: order.shippingAddress.phone || '',
+            ...order.shippingAddress,
+            street: order.shippingAddress.street,
+            postalCode: order.shippingAddress.postalCode
           }
         : undefined,
       billingAddress: order.billingAddress
         ? {
-            name: order.billingAddress.name || '',
-            email: order.billingAddress.email || '',
-            address: order.billingAddress.address || '',
-            city: order.billingAddress.city || '',
-            state: order.billingAddress.state || '',
-            zipCode: order.billingAddress.zipCode || '',
-            country: order.billingAddress.country || '',
-            phone: order.billingAddress.phone || '',
+            ...order.billingAddress,
+            street: order.billingAddress.street,
+            postalCode: order.billingAddress.postalCode
           }
         : undefined,
       orderNumber: order.orderNumber || '',
+      stripeSessionId: order.stripeSessionId || '',
+      customerEmail: order.customerEmail || order.user?.email || order.shippingAddress?.email || '',
     }
 
     // Validate the order data against the schema
     const validatedOrder = orderSchema.safeParse(processedOrder)
-
     if (!validatedOrder.success) {
-      console.error("Order validation failed:", validatedOrder.error)
+      console.error('[OrderAPI] Order validation failed', {
+        orderId,
+        processedOrder,
+        zodError: validatedOrder.error
+      })
       return NextResponse.json(
         { 
           message: "Invalid order data",
-          errors: validatedOrder.error.errors,
-          zodError: validatedOrder.error,
+          errors: validatedOrder.error.errors.map(err => ({
+            path: err.path.join('.'),
+            message: err.message
+          })),
         },
         { status: 422 }
       )
@@ -252,7 +177,11 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
 
     return NextResponse.json(validatedOrder.data)
   } catch (error) {
-    console.error("Error fetching order:", error)
+    console.error('[OrderAPI] Error fetching order', {
+      orderId,
+      error: error instanceof Error ? error.message : error,
+      stack: error instanceof Error ? error.stack : undefined
+    })
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         { 
@@ -266,7 +195,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
       )
     }
     return NextResponse.json(
-      { message: "Failed to fetch order" },
+      { message: "Failed to fetch order", error: error instanceof Error ? error.message : error },
       { status: 500 }
     )
   }
@@ -320,12 +249,13 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ o
       )
     }
 
+    // Use the enum value for status
     const order = await prisma.order.update({
       where: {
         id: orderId,
       },
       data: {
-        status: status as any,
+        status: OrderStatus[status as keyof typeof OrderStatus],
       },
       include: {
         items: {
@@ -356,43 +286,33 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ o
     const processedOrder = {
       ...order,
       total: convertPriceToNumber(order.total) || 0,
-      status: order.status as any || 'PENDING',
+      status: order.status || 'PENDING',
       createdAt: order.createdAt ? order.createdAt.toISOString() : new Date().toISOString(),
-      user: {
-        name: order.user?.name || '',
-        email: order.user?.email || '',
-      },
+      user: order.user ? {
+        name: order.user.name || '',
+        email: order.user.email || '',
+      } : undefined,
       items: order.items.map((item: any) => ({
         ...item,
         price: convertPriceToNumber(item.price) || 0,
         product: {
           ...item.product,
           price: convertPriceToNumber(item.product.price) || 0,
-          image: item.product.image || 'https://via.placeholder.com/400',
+          image: item.product.image || 'https://picsum.photos/400',
         },
       })),
       shippingAddress: order.shippingAddress
         ? {
-            name: order.shippingAddress.name || '',
-            email: order.shippingAddress.email || order.user?.email || '',
-            address: order.shippingAddress.street || '',
-            city: order.shippingAddress.city || '',
-            state: order.shippingAddress.state || '',
-            zipCode: order.shippingAddress.postalCode || '',
-            country: order.shippingAddress.country || '',
-            phone: order.shippingAddress.phone || '',
+            ...order.shippingAddress,
+            street: order.shippingAddress.street,
+            postalCode: order.shippingAddress.postalCode
           }
         : undefined,
       billingAddress: order.billingAddress
         ? {
-            name: order.billingAddress.name || '',
-            email: order.billingAddress.email || '',
-            address: order.billingAddress.address || '',
-            city: order.billingAddress.city || '',
-            state: order.billingAddress.state || '',
-            zipCode: order.billingAddress.zipCode || '',
-            country: order.billingAddress.country || '',
-            phone: order.billingAddress.phone || '',
+            ...order.billingAddress,
+            street: order.billingAddress.street,
+            postalCode: order.billingAddress.postalCode
           }
         : undefined,
       orderNumber: order.orderNumber || '',
@@ -413,7 +333,13 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ o
       )
     }
 
-    return NextResponse.json(validatedOrder.data)
+    return new Response(JSON.stringify(validatedOrder.data), {
+      status: 200,
+      headers: {
+        'Cache-Control': 'no-store, max-age=0, must-revalidate',
+        'Content-Type': 'application/json',
+      },
+    });
   } catch (error) {
     console.error("Error updating order:", error)
     if (error instanceof z.ZodError) {

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 
 interface DragDropOptions {
   onReorder?: (fromIndex: number, toIndex: number) => void

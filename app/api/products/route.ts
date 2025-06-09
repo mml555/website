@@ -171,7 +171,6 @@ export async function GET(request: Request) {
     }
 
     const skip = (page - 1) * limit
-    console.log('[API_PRODUCTS_GET]', { query, where, orderBy, skip, limit })
     const [products, total] = await Promise.all([
       prisma.product.findMany({
         where,
@@ -199,14 +198,6 @@ export async function GET(request: Request) {
 
     return new Response(JSON.stringify({ products: productsWithNumberFields, pagination }), { status: 200 })
   } catch (error) {
-    // Custom error logger
-    console.error('[API_PRODUCTS_GET_ERROR]', {
-      message: error instanceof Error ? error.message : error,
-      stack: error instanceof Error ? error.stack : undefined,
-      time: new Date().toISOString(),
-      route: '/api/products',
-      method: 'GET',
-    })
     return new Response(JSON.stringify({ error: 'Failed to fetch products' }), { status: 500 })
   }
 }
@@ -321,11 +312,6 @@ export async function POST(request: Request) {
     return NextResponse.json(transformedProduct)
   } catch (error) {
     // captureException(error)
-    console.error('[API_PRODUCTS_POST_ERROR]', {
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
-    })
-
     return NextResponse.json(
       { error: 'Failed to create product' },
       { status: 500 }

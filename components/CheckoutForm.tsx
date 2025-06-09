@@ -2,16 +2,6 @@ import React, { useState } from 'react';
 import { useOrder } from '@/context/OrderContext';
 import { useCart } from '@/lib/cart';
 
-interface FormData {
-  name: string;
-  email: string;
-  address: string;
-  city: string;
-  state: string;
-  zipCode: string;
-  country: string;
-}
-
 interface CartItem {
   id: string;
   name: string;
@@ -20,54 +10,103 @@ interface CartItem {
   image?: string;
 }
 
-const initialFormData: FormData = {
-  name: '',
-  email: '',
-  address: '',
-  city: '',
-  state: '',
-  zipCode: '',
-  country: '',
-};
+interface Address {
+  id?: string;
+  name: string;
+  email: string;
+  phone?: string;
+  street: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+}
 
-export default function CheckoutForm() {
-  const [formData, setFormData] = useState<FormData>(initialFormData);
-  const [errors, setErrors] = useState<Partial<FormData>>({});
+interface BillingAddress {
+  id?: string;
+  name: string;
+  email: string;
+  phone?: string;
+  street: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+}
+
+interface CheckoutFormProps {
+  onSubmit: (data: {
+    shippingAddress: Address;
+    billingAddress?: BillingAddress;
+    sameAsShipping: boolean;
+  }) => void;
+  initialData?: {
+    shippingAddress?: Address;
+    billingAddress?: BillingAddress;
+    sameAsShipping?: boolean;
+  };
+}
+
+export default function CheckoutForm({ onSubmit, initialData }: CheckoutFormProps) {
+  const [formData, setFormData] = useState({
+    shippingAddress: {
+      name: initialData?.shippingAddress?.name || '',
+      email: initialData?.shippingAddress?.email || '',
+      phone: initialData?.shippingAddress?.phone || '',
+      street: initialData?.shippingAddress?.street || '',
+      city: initialData?.shippingAddress?.city || '',
+      state: initialData?.shippingAddress?.state || '',
+      postalCode: initialData?.shippingAddress?.postalCode || '',
+      country: initialData?.shippingAddress?.country || '',
+    },
+    billingAddress: {
+      name: initialData?.billingAddress?.name || '',
+      email: initialData?.billingAddress?.email || '',
+      phone: initialData?.billingAddress?.phone || '',
+      street: initialData?.billingAddress?.street || '',
+      city: initialData?.billingAddress?.city || '',
+      state: initialData?.billingAddress?.state || '',
+      postalCode: initialData?.billingAddress?.postalCode || '',
+      country: initialData?.billingAddress?.country || '',
+    },
+    sameAsShipping: initialData?.sameAsShipping ?? true,
+  });
+  const [errors, setErrors] = useState<Partial<Address>>({});
   const { createOrder, error } = useOrder();
   const { items, total } = useCart();
 
   const validateForm = (): boolean => {
-    const newErrors: Partial<FormData> = {};
+    const newErrors: Partial<Address> = {};
 
-    if (!formData.name.trim()) {
+    if (!formData.shippingAddress.name.trim()) {
       newErrors.name = 'Name is required';
     }
 
-    if (!formData.email.trim()) {
+    if (!formData.shippingAddress.email.trim()) {
       newErrors.email = 'Email is required';
-    } else if (!/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(formData.email)) {
+    } else if (!/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(formData.shippingAddress.email)) {
       newErrors.email = 'Invalid email address';
     }
 
-    if (!formData.address.trim()) {
-      newErrors.address = 'Address is required';
+    if (!formData.shippingAddress.street.trim()) {
+      newErrors.street = 'Address is required';
     }
 
-    if (!formData.city.trim()) {
+    if (!formData.shippingAddress.city.trim()) {
       newErrors.city = 'City is required';
     }
 
-    if (!formData.state.trim()) {
+    if (!formData.shippingAddress.state.trim()) {
       newErrors.state = 'State is required';
     }
 
-    if (!formData.zipCode.trim()) {
-      newErrors.zipCode = 'ZIP code is required';
-    } else if (!/^\d{5}(-\d{4})?$/.test(formData.zipCode)) {
-      newErrors.zipCode = 'Invalid ZIP code';
+    if (!formData.shippingAddress.postalCode.trim()) {
+      newErrors.postalCode = 'ZIP code is required';
+    } else if (!/^\d{5}(-\d{4})?$/.test(formData.shippingAddress.postalCode)) {
+      newErrors.postalCode = 'Invalid ZIP code';
     }
 
-    if (!formData.country.trim()) {
+    if (!formData.shippingAddress.country.trim()) {
       newErrors.country = 'Country is required';
     }
 
@@ -91,29 +130,56 @@ export default function CheckoutForm() {
           price: item.price,
         })),
         total,
+        orderNumber: `ORD-${Date.now()}`,
         status: 'PENDING',
         shippingAddress: {
-          street: formData.address,
-          city: formData.city,
-          state: formData.state,
-          postalCode: formData.zipCode,
-          country: formData.country,
+          name: formData.shippingAddress.name,
+          email: formData.shippingAddress.email,
+          phone: formData.shippingAddress.phone,
+          street: formData.shippingAddress.street,
+          city: formData.shippingAddress.city,
+          state: formData.shippingAddress.state,
+          postalCode: formData.shippingAddress.postalCode,
+          country: formData.shippingAddress.country,
         },
         billingAddress: {
-          name: formData.name,
-          email: formData.email,
-          address: formData.address,
-          city: formData.city,
-          state: formData.state,
-          zipCode: formData.zipCode,
-          country: formData.country,
+          name: formData.billingAddress.name,
+          email: formData.billingAddress.email,
+          phone: formData.billingAddress.phone,
+          street: formData.billingAddress.street,
+          city: formData.billingAddress.city,
+          state: formData.billingAddress.state,
+          postalCode: formData.billingAddress.postalCode,
+          country: formData.billingAddress.country,
         },
       });
 
       // Reset form after successful submission
-      setFormData(initialFormData);
+      setFormData({
+        shippingAddress: {
+          name: '',
+          email: '',
+          phone: '',
+          street: '',
+          city: '',
+          state: '',
+          postalCode: '',
+          country: '',
+        },
+        billingAddress: {
+          name: '',
+          email: '',
+          phone: '',
+          street: '',
+          city: '',
+          state: '',
+          postalCode: '',
+          country: '',
+        },
+        sameAsShipping: true,
+      });
     } catch (error) {
-      console.error('Failed to create order:', error);
+      // Remove all console.error statements
     }
   };
 
@@ -124,7 +190,7 @@ export default function CheckoutForm() {
       [name]: value,
     }));
     // Clear error when user starts typing
-    if (errors[name as keyof FormData]) {
+    if (errors[name as keyof Address]) {
       setErrors((prev) => ({
         ...prev,
         [name]: undefined,
@@ -143,7 +209,7 @@ export default function CheckoutForm() {
             type="text"
             id="name"
             name="name"
-            value={formData.name}
+            value={formData.shippingAddress.name}
             onChange={handleChange}
             className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm ${
               errors.name ? 'border-red-500' : ''
@@ -162,7 +228,7 @@ export default function CheckoutForm() {
             type="email"
             id="email"
             name="email"
-            value={formData.email}
+            value={formData.shippingAddress.email}
             onChange={handleChange}
             className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm ${
               errors.email ? 'border-red-500' : ''
@@ -180,15 +246,15 @@ export default function CheckoutForm() {
           <input
             type="text"
             id="address"
-            name="address"
-            value={formData.address}
+            name="street"
+            value={formData.shippingAddress.street}
             onChange={handleChange}
             className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm ${
-              errors.address ? 'border-red-500' : ''
+              errors.street ? 'border-red-500' : ''
             }`}
           />
-          {errors.address && (
-            <p className="mt-1 text-sm text-red-600">{errors.address}</p>
+          {errors.street && (
+            <p className="mt-1 text-sm text-red-600">{errors.street}</p>
           )}
         </div>
 
@@ -200,7 +266,7 @@ export default function CheckoutForm() {
             type="text"
             id="city"
             name="city"
-            value={formData.city}
+            value={formData.shippingAddress.city}
             onChange={handleChange}
             className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm ${
               errors.city ? 'border-red-500' : ''
@@ -219,7 +285,7 @@ export default function CheckoutForm() {
             type="text"
             id="state"
             name="state"
-            value={formData.state}
+            value={formData.shippingAddress.state}
             onChange={handleChange}
             className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm ${
               errors.state ? 'border-red-500' : ''
@@ -237,15 +303,15 @@ export default function CheckoutForm() {
           <input
             type="text"
             id="zipCode"
-            name="zipCode"
-            value={formData.zipCode}
+            name="postalCode"
+            value={formData.shippingAddress.postalCode}
             onChange={handleChange}
             className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm ${
-              errors.zipCode ? 'border-red-500' : ''
+              errors.postalCode ? 'border-red-500' : ''
             }`}
           />
-          {errors.zipCode && (
-            <p className="mt-1 text-sm text-red-600">{errors.zipCode}</p>
+          {errors.postalCode && (
+            <p className="mt-1 text-sm text-red-600">{errors.postalCode}</p>
           )}
         </div>
 
@@ -257,7 +323,7 @@ export default function CheckoutForm() {
             type="text"
             id="country"
             name="country"
-            value={formData.country}
+            value={formData.shippingAddress.country}
             onChange={handleChange}
             className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm ${
               errors.country ? 'border-red-500' : ''

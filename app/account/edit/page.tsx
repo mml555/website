@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
-export default function EditProfilePage() {
+export default function AccountEditPage() {
   const { data: session } = useSession();
   const user = session?.user;
   const router = useRouter();

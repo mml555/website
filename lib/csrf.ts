@@ -1,5 +1,6 @@
 import { randomBytes, createHmac } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
+import { nodeEnv } from './env'
 
 const CSRF_SECRET = process.env.CSRF_SECRET || 'default_csrf_secret'
 const CSRF_COOKIE = 'csrf_token'
@@ -14,7 +15,7 @@ export function setCsrfCookie(response: NextResponse, token: string) {
   response.cookies.set(CSRF_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: nodeEnv === 'production',
     path: '/',
     maxAge: 60 * 60, // 1 hour
   })

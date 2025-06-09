@@ -31,7 +31,6 @@ export async function getJsonFromRedis<T>(key: string): Promise<T | null> {
 // Initialize Redis with default data if empty
 export async function initializeRedis() {
   if (!redis) {
-    console.warn('Redis not initialized, skipping initialization')
     return
   }
 
@@ -41,7 +40,6 @@ export async function initializeRedis() {
       await redis.set('products', JSON.stringify([]))
     }
   } catch (error) {
-    console.warn('Failed to initialize Redis with default data:', error)
   }
 }
 

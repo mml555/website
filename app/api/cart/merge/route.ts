@@ -3,7 +3,6 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { Redis } from '@upstash/redis';
-import { decimalToNumber } from '@/lib/utils';
 import { getJsonFromRedis } from '@/lib/redis';
 
 const redis = new Redis({
@@ -12,18 +11,19 @@ const redis = new Redis({
 });
 
 function mergeCarts(guestItems: any[], userItems: any[]) {
+  // Deduplicate by productId + variantId
   const merged = new Map();
-  userItems.forEach(item => merged.set(item.id + (item.variantId || ''), item));
-  guestItems.forEach(item => {
-    const key = item.id + (item.variantId || '');
+  [...userItems, ...guestItems].forEach(item => {
+    const key = item.id + '::' + (item.variantId || '');
     if (merged.has(key)) {
-      const userItem = merged.get(key);
+      // If already exists, sum the quantities
+      const existing = merged.get(key);
       merged.set(key, {
-        ...userItem,
-        quantity: Math.max(userItem.quantity, item.quantity)
+        ...existing,
+        quantity: existing.quantity + item.quantity
       });
     } else {
-      merged.set(key, item);
+      merged.set(key, { ...item });
     }
   });
   return Array.from(merged.values());
@@ -57,6 +57,8 @@ export async function POST(request: Request) {
     })) || [];
     // Merge
     const merged = mergeCarts(guestItems, userItems);
+    // Log merged cart for debugging
+    console.log('[API_CART_MERGE] Merged cart:', merged);
     // Save merged cart to DB
     await prisma.cart.upsert({
       where: { userId },

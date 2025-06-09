@@ -52,7 +52,6 @@ export default function WishlistButton({ productId, initialIsWishlisted = false 
       } else {
         toast.error('Failed to update wishlist')
       }
-      console.error('Wishlist error:', error)
     } finally {
       clearTimeout(timeoutId)
       setIsLoading(false)

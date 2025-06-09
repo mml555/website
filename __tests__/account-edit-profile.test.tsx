@@ -4,7 +4,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import EditProfilePage from '../app/account/edit/page';
 import React from 'react';
-import { CartProvider } from '../lib/cart';
 import userEvent from '@testing-library/user-event';
 
 jest.mock('next-auth/react', () => ({

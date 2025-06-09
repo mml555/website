@@ -17,7 +17,6 @@ export function ErrorBoundary({ children, fallback, onError }: Props) {
     const handleError = (error: Error, errorInfo: React.ErrorInfo) => {
       setHasError(true)
       setError(error)
-      console.error('Error caught by boundary:', error, errorInfo)
       
       if (onError) {
         onError(error, errorInfo)

@@ -76,7 +76,6 @@ export async function sendAdminEmail(subject: string, message: string) {
     });
     return true;
   } catch (error) {
-    console.error('Failed to send admin notification email:', error);
     return false;
   }
 } 

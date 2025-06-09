@@ -1,14 +1,16 @@
 // NOTE: If you add any server-only values here, do NOT import this file in client components.
 // Only use NEXT_PUBLIC_* and NODE_ENV for client-safe config.
 
+import { nodeEnv } from './env'
+
 export const config = {
   stripe: {
     publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '',
     // Add more Stripe-related config here
   },
   environment: {
-    isDevelopment: process.env.NODE_ENV === 'development',
-    isProduction: process.env.NODE_ENV === 'production',
+    isDevelopment: nodeEnv === 'development',
+    isProduction: nodeEnv === 'production',
     // Add more environment-specific settings here
   },
   api: {

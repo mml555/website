@@ -5,6 +5,16 @@ import { render, screen } from '@testing-library/react';
 import React from 'react';
 import { CartProvider } from '../lib/cart';
 
+// Mock next/navigation's useRouter to prevent redirects
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: jest.fn(),
+    replace: jest.fn(),
+    prefetch: jest.fn(),
+    back: jest.fn(),
+  }),
+}));
+
 // Mock useSession to return loading
 jest.mock('next-auth/react', () => ({
   useSession: () => ({ data: null, status: 'loading' })
@@ -29,7 +39,7 @@ jest.mock('../lib/cart', () => ({
   })
 }));
 
-import PaymentPage from '../app/checkout/payment/page';
+import PaymentPage from '../app/checkout/CheckoutPaymentPage';
 
 function renderWithCartProvider(ui: React.ReactElement) {
   return render(
@@ -38,16 +48,20 @@ function renderWithCartProvider(ui: React.ReactElement) {
 }
 
 describe('PaymentPage (loading state)', () => {
-  it('shows loading spinner while loading', () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+  afterEach(() => {
+    sessionStorage.clear();
+  });
+  it('shows loading spinner while loading', async () => {
     // Set up sessionStorage mocks for addresses and shipping rate
     sessionStorage.setItem('shippingAddress', JSON.stringify({ street: '123 Main', city: 'Town', state: 'CA', postalCode: '90001', country: 'USA' }));
     sessionStorage.setItem('billingAddress', JSON.stringify({ name: 'Test User', email: 'test@example.com', street: '123 Main', city: 'Town', state: 'CA', postalCode: '90001', country: 'USA' }));
     sessionStorage.setItem('shippingRate', JSON.stringify({ name: 'Express', rate: 10, estimatedDays: 2 }));
 
     renderWithCartProvider(<PaymentPage />);
-    expect(screen.getByRole('status')).toBeInTheDocument();
-    expect(screen.getByText(/Loading payment information/i)).toBeInTheDocument();
-
-    sessionStorage.clear();
+    expect(await screen.findByRole('status')).toBeInTheDocument();
+    expect(await screen.findByText(/Loading payment information/i)).toBeInTheDocument();
   });
 }); 

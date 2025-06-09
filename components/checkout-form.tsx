@@ -6,8 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertCircle, CreditCard } from 'lucide-react'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { BillingAddress } from '@/types/address'
 
 interface CheckoutFormProps {
   orderId?: string | null;
@@ -15,9 +15,10 @@ interface CheckoutFormProps {
   items?: any[];
   onPaying?: (paying: boolean) => void;
   onSuccess?: () => void;
+  billingAddress: BillingAddress | null;
 }
 
-export default function CheckoutForm({ orderId, onPaying, onSuccess }: CheckoutFormProps) {
+export default function CheckoutForm({ orderId, clientSecret, onPaying, onSuccess, billingAddress }: CheckoutFormProps) {
   const stripe = useStripe();
   const elements = useElements();
   const [loading, setLoading] = useState(false);
@@ -27,30 +28,38 @@ export default function CheckoutForm({ orderId, onPaying, onSuccess }: CheckoutF
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!stripe || !elements) return;
+
     setLoading(true);
     setError(null);
     if (onPaying) onPaying(true);
-    if (!stripe || !elements) {
-      setError('Stripe has not loaded yet.');
-      setLoading(false);
-      if (onPaying) onPaying(false);
-      return;
-    }
+
     try {
-      const result = await stripe.confirmPayment({
+      const { error: submitError } = await stripe.confirmPayment({
         elements,
-        confirmParams: {},
-        redirect: 'if_required',
+        confirmParams: {
+          return_url: `${window.location.origin}/order-confirmation`,
+          payment_method_data: {
+            billing_details: {
+              name: billingAddress?.name || '',
+              email: billingAddress?.email || '',
+              phone: billingAddress?.phone || '',
+              address: {
+                line1: billingAddress?.street || '',
+                line2: '',
+                city: billingAddress?.city || '',
+                state: billingAddress?.state || '',
+                postal_code: billingAddress?.postalCode || '',
+                country: billingAddress?.country === 'USA' ? 'US' : billingAddress?.country || '',
+              },
+            },
+          },
+        },
       });
-      if (!result || typeof result !== 'object') {
-        setError('Unexpected error: No response from payment processor.');
-        setLoading(false);
-        if (onPaying) onPaying(false);
-        return;
-      }
-      if (result.error) {
-        setError(result.error.message || 'Payment failed.');
-      } else if (result.paymentIntent) {
+
+      if (submitError) {
+        setError(submitError.message || 'An error occurred while processing your payment.');
+      } else {
         setRedirecting(true);
         if (onSuccess) onSuccess();
         if (orderId) {
@@ -59,14 +68,14 @@ export default function CheckoutForm({ orderId, onPaying, onSuccess }: CheckoutF
           router.push(`/order-confirmation?payment_intent=${result.paymentIntent.id}`);
         }
         return;
-      } else {
-        setError('Payment succeeded but no payment intent returned.');
       }
     } catch (err: any) {
       setError(err?.message || 'An error occurred during payment.');
+      console.error('Payment error:', err);
+    } finally {
+      setLoading(false);
+      if (onPaying) onPaying(false);
     }
-    setLoading(false);
-    if (onPaying) onPaying(false);
   };
 
   if (redirecting) {
@@ -88,18 +97,59 @@ export default function CheckoutForm({ orderId, onPaying, onSuccess }: CheckoutF
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <PaymentElement />
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Error</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          
+          <div id="payment-element">
+            <PaymentElement
+              options={{
+                defaultValues: {
+                  billingDetails: {
+                    name: billingAddress?.name || '',
+                    email: billingAddress?.email || '',
+                    phone: billingAddress?.phone || '',
+                    address: {
+                      line1: billingAddress?.street || '',
+                      line2: '',
+                      city: billingAddress?.city || '',
+                      state: billingAddress?.state || '',
+                      postal_code: billingAddress?.postalCode || '',
+                      country: billingAddress?.country === 'USA' ? 'US' : billingAddress?.country || '',
+                    },
+                  },
+                },
+                fields: {
+                  billingDetails: {
+                    name: 'auto',
+                    email: 'auto',
+                    phone: 'auto',
+                    address: {
+                      line1: 'auto',
+                      line2: 'auto',
+                      city: 'auto',
+                      state: 'auto',
+                      postal_code: 'auto',
+                      country: 'auto',
+                    },
+                  },
+                },
+              } as any}
+            />
+          </div>
         </CardContent>
       </Card>
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-      <Button type="submit" className="w-full" disabled={!stripe || loading}>
-        {loading ? 'Processing...' : 'Pay'}
+
+      <Button
+        type="submit"
+        disabled={!stripe || loading}
+        className="w-full"
+      >
+        {loading ? 'Processing...' : 'Pay Now'}
       </Button>
     </form>
   );

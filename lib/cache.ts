@@ -1,5 +1,3 @@
-import { NextResponse } from 'next/server'
-import type { NextRequest } from 'next/server'
 
 // Simple in-memory store for development
 // In production, this should be replaced with a proper KV store

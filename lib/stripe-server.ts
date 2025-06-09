@@ -1,6 +1,5 @@
 // NOTE: This file is server-only. Do NOT import in client components.
 import Stripe from 'stripe';
-import { env } from '@/lib/env';
 import { AppError } from './app-errors';
 import { logError } from './errors';
 
@@ -132,4 +131,7 @@ export function getStripeEnvStatus() {
     publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ? (process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.startsWith('pk_') ? process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.slice(0, 8) + '...' : 'invalid') : 'missing',
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ? process.env.STRIPE_WEBHOOK_SECRET.slice(0, 8) + '...' : 'missing',
   };
-} 
+}
+
+// TODO: Prevent double payment submissions in UI and API
+// TODO: Add more robust error handling for payment failures 

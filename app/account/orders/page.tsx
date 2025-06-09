@@ -13,7 +13,7 @@ interface Order {
   createdAt: string;
 }
 
-export default function OrderHistoryPage() {
+export default function AccountOrdersPage() {
   const { data: session, status } = useSession();
   const user = session?.user;
   const [orders, setOrders] = useState<Order[]>([]);

@@ -1,3 +1,6 @@
+/**
+ * @jest-environment node
+ */
 import {
   createUserAddress,
   listUserAddresses,
@@ -32,10 +35,11 @@ describe('User Address Utility', () => {
       type: 'SHIPPING',
       name: 'Test User',
       email: 'test-address@example.com',
-      address: '123 Main St',
+      phone: '123-456-7890',
+      street: '123 Main St',
       city: 'Testville',
       state: 'TS',
-      zipCode: '12345',
+      postalCode: '12345',
       country: 'Testland',
     };
     const address = await createUserAddress(user.id, data);
@@ -55,15 +59,16 @@ describe('User Address Utility', () => {
       type: 'SHIPPING',
       name: 'Updated User',
       email: 'test-address@example.com',
-      address: '456 Main St',
+      phone: '123-456-7890',
+      street: '456 Main St',
       city: 'Testville',
       state: 'TS',
-      zipCode: '12345',
+      postalCode: '12345',
       country: 'Testland',
     };
     const address = await updateUserAddress(user.id, data);
     expect(address.name).toBe('Updated User');
-    expect(address.address).toBe('456 Main St');
+    expect(address.street).toBe('456 Main St');
   });
 
   it('should delete an address', async () => {

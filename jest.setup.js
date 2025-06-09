@@ -3,6 +3,10 @@ require('regenerator-runtime/runtime');
 // Learn more: https://github.com/testing-library/jest-dom
 require('@testing-library/jest-dom');
 
+if (!process.env.NODE_ENV) {
+  Object.defineProperty(process.env, 'NODE_ENV', { value: 'test' });
+}
+
 // Mock next/router
 jest.mock('next/router', () => ({
   useRouter() {

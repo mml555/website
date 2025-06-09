@@ -1,8 +1,6 @@
-import { NextResponse } from 'next/server'
 // @ts-ignore
 // const { Resend } = require('resend')
 import redis from '@/lib/redis'
-import { headers } from 'next/headers'
 import { z } from 'zod'
 
 // Rate limiting constants

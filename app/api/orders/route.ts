@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { getServerSession } from "next-auth"
+import { getServerSession } from "next-auth/next"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import Stripe from "stripe"
@@ -8,8 +8,11 @@ import { Redis } from '@upstash/redis'
 import { generateOrderNumber } from '@/lib/order-utils'
 import nodemailer from 'nodemailer'
 import crypto from 'crypto'
-import redis, { getJsonFromRedis } from '@/lib/redis'
+import { getJsonFromRedis } from '@/lib/redis'
 import { logError } from '@/lib/errors'
+import { Session } from "next-auth"
+import { OrderStatus } from '@prisma/client'
+import { Decimal } from '@prisma/client/runtime/library'
 
 // Initialize Redis client
 const redisClient = new Redis({
@@ -21,20 +24,24 @@ const redisClient = new Redis({
 const CACHE_TTL = 300 // 5 minutes
 
 // Initialize Stripe with proper error handling
-let stripe: Stripe | null = null;
-try {
+const getStripe = () => {
   if (!process.env.STRIPE_SECRET_KEY) {
     logError('Stripe secret key is missing');
-  } else {
-    stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+    throw new Error('Stripe secret key is missing');
+  }
+  try {
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
       maxNetworkRetries: 3,
       timeout: 20000, // 20 seconds
+      apiVersion: '2023-10-16',
     });
     logError('Stripe initialized successfully');
+    return stripe;
+  } catch (error) {
+    logError('Failed to initialize Stripe:', error instanceof Error ? error.stack : String(error));
+    throw new Error('Failed to initialize Stripe');
   }
-} catch (error) {
-  logError('Failed to initialize Stripe:', error instanceof Error ? error.message : String(error));
-}
+};
 
 // --- Zod Schemas ---
 const querySchema = z.object({
@@ -42,6 +49,36 @@ const querySchema = z.object({
   search: z.string().optional(),
   sortBy: z.string().optional(),
   status: z.string().optional(),
+})
+
+// Validation schemas
+const ItemSchema = z.object({
+  productId: z.string(),
+  variantId: z.string().optional(),
+  quantity: z.number().int().positive(),
+  price: z.number().positive()
+})
+
+const AddressSchema = z.object({
+  name: z.string(),
+  email: z.string().email(),
+  phone: z.string().optional(),
+  street: z.string(),
+  city: z.string(),
+  state: z.string(),
+  postalCode: z.string(),
+  country: z.string()
+})
+
+const CheckoutSchema = z.object({
+  items: z.array(ItemSchema).nonempty(),
+  shippingAddress: AddressSchema,
+  billingAddress: AddressSchema,
+  shippingRate: z.object({
+    name: z.string(),
+    rate: z.number().positive()
+  }),
+  total: z.number().positive()
 })
 
 // --- Type Definitions ---
@@ -74,20 +111,20 @@ interface Order {
     id: string
     name: string
     email: string
-    address: string
+    street: string
     city: string
     state: string
-    zipCode: string
+    postalCode: string
     country: string
   } | null
   billingAddress: {
     id: string
     name: string
     email: string
-    address: string
+    street: string
     city: string
     state: string
-    zipCode: string
+    postalCode: string
     country: string
   } | null
 }
@@ -167,6 +204,8 @@ export async function GET(request: Request) {
     const url = new URL(request.url)
     const searchParams = url.searchParams
     const payment_intent = searchParams.get('payment_intent')
+    const email = searchParams.get('email')
+    const orderNumber = searchParams.get('orderNumber')
     if (payment_intent) {
       // Try to fetch the order by stripeSessionId
       const order = await prisma.order.findFirst({
@@ -232,6 +271,49 @@ export async function GET(request: Request) {
         orderNumber: order.orderNumber,
       }
       return NextResponse.json(processedOrder, { headers: getResponseHeaders() })
+    }
+
+    if (email || orderNumber) {
+      // Only allow admin or guest search
+      let session = null
+      try {
+        session = await getServerSession(authOptions)
+      } catch {}
+      let where: any = {}
+      if (email) {
+        where = {
+          ...where,
+          user: {
+            email: email,
+          },
+        }
+      }
+      if (orderNumber) {
+        where = {
+          ...where,
+          orderNumber: orderNumber,
+        }
+      }
+      // If not admin, only allow guest orders
+      if (!session?.user || session.user.role !== 'ADMIN') {
+        where = {
+          ...where,
+          user: {
+            ...where.user,
+            isGuest: true,
+          },
+        }
+      }
+      const orders = await prisma.order.findMany({
+        where,
+        include: {
+          user: true,
+          items: { include: { product: true } },
+          shippingAddress: true,
+          billingAddress: true,
+        },
+      })
+      return NextResponse.json(orders)
     }
 
     const session = await getServerSession(authOptions)
@@ -408,7 +490,7 @@ export async function PATCH(req: Request) {
 
     const updated = await prisma.order.updateMany({
       where: { id: { in: orderIds } },
-      data: { status },
+      data: { status: OrderStatus[status as keyof typeof OrderStatus] },
     })
 
     // Log audit
@@ -435,255 +517,258 @@ export async function PATCH(req: Request) {
 
 export async function POST(request: Request) {
   try {
-    // Log environment variables (without sensitive values)
-    logError('Environment check:', JSON.stringify({
+    // Log environment check
+    logError('Environment check: ' + JSON.stringify({
       hasStripeKey: !!process.env.STRIPE_SECRET_KEY,
       hasStripeWebhookSecret: !!process.env.STRIPE_WEBHOOK_SECRET,
       hasPublishableKey: !!process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
-    }));
+    }))
 
-    const session = await getServerSession(authOptions);
-    let userId = session?.user?.id || null;
-    const data = await request.json();
-    logError('Creating order with data:', JSON.stringify({
-      userId,
-      isGuest: !userId,
-      total: data.total,
-      itemCount: data.items?.length || 0,
-      hasShippingAddress: !!data.shippingAddress,
-      hasBillingAddress: !!data.billingAddress,
-      items: data.items,
-      shippingAddress: data.shippingAddress,
-      billingAddress: data.billingAddress,
-    }));
+    const session = await getServerSession(authOptions)
+    let userId = session?.user?.id || null
 
-    // If not logged in, require email and auto-create user if needed
+    // Parse and validate request body
+    const body = await request.json()
+    console.log('Received request body:', JSON.stringify(body, null, 2));
+    
+    const parsed = CheckoutSchema.safeParse(body)
+    if (!parsed.success) {
+      console.error('Validation errors:', JSON.stringify(parsed.error.format(), null, 2));
+      logError('Invalid checkout data:', parsed.error.flatten())
+      return NextResponse.json(
+        { 
+          message: 'Invalid checkout data', 
+          details: parsed.error.format(),
+          issues: parsed.error.issues 
+        },
+        { status: 400, headers: getResponseHeaders() }
+      )
+    }
+    const { items, shippingAddress, billingAddress, shippingRate, total } = parsed.data
+    const sameAsShipping = !billingAddress
+
+    // Generate order number
+    const orderNumber = generateOrderNumber()
+    logError('[ORDER] Generated order number:', orderNumber)
+
+    // Handle guest user creation
     if (!userId) {
-      const email = data.shippingAddress?.email || data.billingAddress?.email;
-      if (!email) {
-        return NextResponse.json(
-          { message: "Email is required for guest checkout" },
-          { status: 400, headers: getResponseHeaders() }
-        );
-      }
-      let user = await prisma.user.findUnique({ where: { email } });
+      const email = shippingAddress.email
+      let user = await prisma.user.findUnique({ where: { email } })
       if (user) {
-        // If user exists and is not a guest, require login
         if (!user.isGuest) {
-          return NextResponse.json(
-            { message: "An account with this email already exists. Please log in to continue your order.", code: 'ACCOUNT_EXISTS' },
-            { status: 409, headers: getResponseHeaders() }
-          );
+          const guestEmail = `guest.${Date.now()}@example.com`
+          user = await prisma.user.create({
+            data: {
+              email: guestEmail,
+              name: shippingAddress.name || "Guest",
+              role: "USER",
+              isGuest: true,
+            },
+          })
         }
-        // If user is a guest, proceed
       } else {
+        const guestEmail = `guest.${Date.now()}@example.com`
         user = await prisma.user.create({
           data: {
-            email,
-            name: data.shippingAddress?.name || "Guest",
+            email: guestEmail,
+            name: shippingAddress.name || "Guest",
             role: "USER",
             isGuest: true,
-            // Optionally: generate a random password or leave null
           },
-        });
-        // Send welcome email with password setup link
-        await sendWelcomeEmail({
-          email,
-          name: data.shippingAddress?.name || undefined,
-          id: user.id
-        });
+        })
       }
-      userId = user.id;
+      userId = user.id
     }
 
-    // Validate total amount
-    if (!data.total || data.total <= 0) {
-      logError('Invalid total amount:', String(data.total));
-      return NextResponse.json(
-        { message: "Invalid total amount" },
-        { status: 400, headers: getResponseHeaders() }
-      );
-    }
+    // Batch fetch all products
+    const productIds = items.map(i => i.productId)
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: { 
+        id: true, 
+        stock: true, 
+        name: true, 
+        price: true,
+        variants: {
+          select: {
+            id: true,
+            stock: true,
+            price: true
+          }
+        }
+      }
+    })
 
-    // Validate items
-    if (!data.items || !Array.isArray(data.items) || data.items.length === 0) {
-      logError('Invalid items:', JSON.stringify(data.items));
-      return NextResponse.json(
-        { message: "Invalid items" },
-        { status: 400, headers: getResponseHeaders() }
-      );
-    }
+    const productMap = Object.fromEntries(products.map(p => [p.id, p]))
 
-    // Validate shipping address
-    if (!data.shippingAddress) {
-      logError('Missing shipping address');
-      return NextResponse.json(
-        { message: "Shipping address is required" },
-        { status: 400, headers: getResponseHeaders() }
-      );
-    }
-
-    // --- Final stock and variant check before order creation ---
-    for (const item of data.items) {
-      // Check product stock
-      const product = await prisma.product.findUnique({
-        where: { id: item.productId },
-        select: { stock: true, variants: true, name: true }
-      });
+    // Validate stock and calculate total
+    let calculatedTotal = 0
+    for (const item of items) {
+      const product = productMap[item.productId]
       if (!product) {
         return NextResponse.json(
-          { message: `Sorry, a product in your cart was not found and may have been removed. Please refresh your cart and try again.`, code: 'PRODUCT_NOT_FOUND', productId: item.productId },
+          { message: `Product not found: ${item.productId}`, code: 'PRODUCT_NOT_FOUND' },
           { status: 400, headers: getResponseHeaders() }
-        );
+        )
       }
+
       if (item.variantId) {
-        // Check variant stock
-        const variant = product.variants.find((v: any) => v.id === item.variantId);
+        const variant = product.variants.find(v => v.id === item.variantId)
         if (!variant) {
           return NextResponse.json(
-            { message: `Sorry, the selected variant for "${product.name}" is no longer available. Please update your cart.`, code: 'VARIANT_NOT_FOUND', productId: item.productId, variantId: item.variantId },
+            { message: `Variant not found: ${item.variantId}`, code: 'VARIANT_NOT_FOUND' },
             { status: 400, headers: getResponseHeaders() }
-          );
+          )
         }
         if (variant.stock < item.quantity) {
           return NextResponse.json(
-            { message: `Sorry, there is not enough stock for "${product.name}" (selected variant). Please adjust your cart.`, code: 'OUT_OF_STOCK', productId: item.productId, variantId: item.variantId },
+            { message: `Insufficient stock for variant: ${item.variantId}`, code: 'OUT_OF_STOCK' },
             { status: 400, headers: getResponseHeaders() }
-          );
+          )
         }
-      } else if (product.stock < item.quantity) {
-        return NextResponse.json(
-          { message: `Sorry, there is not enough stock for "${product.name}". Please adjust your cart.`, code: 'OUT_OF_STOCK', productId: item.productId },
-          { status: 400, headers: getResponseHeaders() }
-        );
+        calculatedTotal += Number(variant.price || product.price) * item.quantity
+      } else {
+        if (product.stock < item.quantity) {
+          return NextResponse.json(
+            { message: `Insufficient stock for product: ${item.productId}`, code: 'OUT_OF_STOCK' },
+            { status: 400, headers: getResponseHeaders() }
+          )
+        }
+        calculatedTotal += Number(product.price) * item.quantity
       }
     }
 
-    // Create Stripe PaymentIntent FIRST
+    // Add shipping rate to total
+    calculatedTotal += shippingRate.rate
+
+    // Validate total matches
+    if (calculatedTotal !== total) {
+      logError('Total mismatch:', JSON.stringify({ calculated: calculatedTotal, received: total }))
+      return NextResponse.json(
+        { message: "Total amount mismatch" },
+        { status: 400, headers: getResponseHeaders() }
+      )
+    }
+
+    // Create the order with the original email
+    const order = await prisma.order.create({
+      data: {
+        orderNumber,
+        user: userId ? { connect: { id: userId } } : undefined,
+        status: OrderStatus.PENDING,
+        items: {
+          create: items.map(item => ({
+            product: { connect: { id: item.productId } },
+            quantity: item.quantity,
+            price: new Decimal(item.price),
+            ...(item.variantId ? { variant: { connect: { id: item.variantId } } } : {})
+          }))
+        },
+        total: new Decimal(calculatedTotal),
+        customerEmail: shippingAddress.email,
+        shippingRate: new Decimal(shippingRate.rate),
+        shippingAddress: {
+          create: {
+            name: shippingAddress.name,
+            email: shippingAddress.email,
+            phone: shippingAddress.phone || '',
+            street: shippingAddress.street,
+            city: shippingAddress.city,
+            state: shippingAddress.state,
+            postalCode: shippingAddress.postalCode,
+            country: shippingAddress.country,
+          }
+        },
+        ...(billingAddress && !sameAsShipping ? {
+          billingAddress: {
+            create: {
+              name: billingAddress.name,
+              email: billingAddress.email,
+              phone: billingAddress.phone || '',
+              street: billingAddress.street,
+              city: billingAddress.city,
+              state: billingAddress.state,
+              postalCode: billingAddress.postalCode,
+              country: billingAddress.country,
+            }
+          }
+        } : {})
+      },
+    })
+
+    logError('[Order] Created successfully:', JSON.stringify({ id: order.id, number: orderNumber }))
+
+    // Create Stripe PaymentIntent with order ID
+    const stripe = getStripe()
     let paymentIntent;
     try {
-      const amount = Math.round(data.total * 100); // Convert to cents
-      logError('Creating payment intent with amount:', JSON.stringify({
-        originalTotal: data.total,
-        amountInCents: amount,
-        items: data.items.length
-      }));
-
-      if (!stripe) {
-        logError('Stripe is not initialized');
-        return NextResponse.json(
-          { message: "Stripe is not initialized" },
-          { status: 500, headers: getResponseHeaders() }
-        );
-      }
-
+      logError(`[Stripe] Creating intent: $${calculatedTotal.toFixed(2)} for ${items.length} items`)
+      
       paymentIntent = await stripe.paymentIntents.create({
-        amount,
+        amount: Math.round(calculatedTotal * 100), // Convert to cents
         currency: 'usd',
-        metadata: {
-          // You can add orderNumber or other info here if needed
-        },
         automatic_payment_methods: {
           enabled: true,
         },
-        receipt_email: data.shippingAddress?.email || data.billingAddress?.email,
-      });
-
-      logError('Payment intent created successfully:', paymentIntent.id);
-    } catch (stripeError: any) {
-      logError('Failed to create payment intent:', JSON.stringify({
-        error: stripeError.message,
-        code: stripeError.code,
-        type: stripeError.type,
-      }));
-      return NextResponse.json(
-        {
-          message: "Failed to create payment intent",
-          error: stripeError.message
-        },
-        { status: 500, headers: getResponseHeaders() }
-      );
-    }
-
-    // Create order in database, using paymentIntent.id as stripeSessionId
-    let order = null;
-    try {
-      const orderNumber = generateOrderNumber();
-      order = await prisma.order.create({
-        data: {
+        metadata: {
+          orderId: order.id,
           orderNumber,
-          userId,
-          status: "PENDING",
-          total: data.total,
-          customerEmail: data.shippingAddress?.email || data.billingAddress?.email,
+          cartSize: items.length.toString(),
+          total: calculatedTotal.toFixed(2),
+          items: JSON.stringify(items.map(i => ({ id: i.productId, quantity: i.quantity, price: i.price }))),
+        },
+      })
+      logError('[Stripe] Payment intent created:', paymentIntent.id)
+
+      // Update order with payment intent ID
+      await prisma.order.update({
+        where: { id: order.id },
+        data: {
           stripeSessionId: paymentIntent.id,
-          items: {
-            create: data.items.map((item: any) => {
-              if (!item.productId) {
-                throw new Error('Order item missing productId');
-              }
-              return {
-                productId: item.productId,
-                variantId: item.variantId || undefined,
-                quantity: item.quantity,
-                price: item.price,
-              };
-            }),
-          },
-          shippingAddress: {
-            create: {
-              street: data.shippingAddress.address,
-              city: data.shippingAddress.city,
-              state: data.shippingAddress.state,
-              postalCode: data.shippingAddress.zipCode,
-              country: data.shippingAddress.country,
-            },
-          },
-          ...(data.billingAddress && {
-            billingAddress: {
-              create: {
-                name: data.billingAddress.name || data.shippingAddress.name,
-                email: data.billingAddress.email || data.shippingAddress.email,
-                phone: data.billingAddress.phone || data.shippingAddress.phone,
-                address: data.billingAddress.address,
-                city: data.billingAddress.city,
-                state: data.billingAddress.state,
-                zipCode: data.billingAddress.zipCode,
-                country: data.billingAddress.country || "United States",
-              },
-            },
-          }),
-        },
-        include: {
-          items: true,
-          shippingAddress: true,
-          billingAddress: true,
-        },
-      });
-      logError('Order created successfully: ' + order.id + ' ' + order.orderNumber);
-    } catch (orderError) {
-      logError('Order creation failed: ' + (orderError instanceof Error ? orderError.message : String(orderError)));
-      // Optionally: cancel the PaymentIntent if order creation fails
-      if (paymentIntent?.id) {
-        try {
-          await stripe.paymentIntents.cancel(paymentIntent.id);
-        } catch (cancelError) {
-          logError('Failed to cancel payment intent after order creation error: ' + (cancelError instanceof Error ? cancelError.message : String(cancelError)));
         }
-      }
+      })
+    } catch (error) {
+      logError('[Stripe] Failed to create payment intent:', error)
+      // Delete the order if payment intent creation fails
+      await prisma.order.delete({
+        where: { id: order.id }
+      })
       return NextResponse.json(
-        { message: "Failed to create order", details: orderError instanceof Error ? orderError.message : orderError },
+        { message: 'Failed to create payment intent', error: error instanceof Error ? error.message : String(error) },
         { status: 500, headers: getResponseHeaders() }
-      );
+      )
     }
 
-    return NextResponse.json({
-      id: order.id,
-      orderNumber: order.orderNumber,
-      clientSecret: paymentIntent.client_secret,
-    }, { headers: getResponseHeaders() });
-  } catch (err) {
-    logError('Order creation error: ' + (err instanceof Error ? err.message : String(err)));
-    return new Response(JSON.stringify({ message: 'Failed to create order', details: err instanceof Error ? err.message : err }), { status: 500 });
+    if (!paymentIntent || !paymentIntent.client_secret) {
+      logError('[Stripe] Payment intent missing client secret')
+      // Delete the order if payment intent is invalid
+      await prisma.order.delete({
+        where: { id: order.id }
+      })
+      return NextResponse.json(
+        { message: 'Payment intent created but missing client secret' },
+        { status: 500, headers: getResponseHeaders() }
+      )
+    }
+
+    // Return the client secret and order ID
+    return NextResponse.json(
+      {
+        clientSecret: paymentIntent.client_secret,
+        orderId: order.id,
+        status: 'success'
+      },
+      { status: 200, headers: getResponseHeaders() }
+    )
+  } catch (error: any) {
+    logError('[Order] Unexpected error:', error)
+    return NextResponse.json(
+      {
+        message: 'An unexpected error occurred',
+        error: error instanceof Error ? error.message : String(error)
+      },
+      { status: 500, headers: getResponseHeaders() }
+    )
   }
 } 

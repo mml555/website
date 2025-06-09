@@ -61,7 +61,7 @@ export default function CheckoutForm({ clientSecret, items }: CheckoutFormProps)
     if (type === "shipping") {
       setShippingAddress((prev) => ({ ...prev, [field]: value }))
       if (sameAsShipping) {
-        setBillingAddress((prev) => ({ ...prev, [field]: value }))
+        setBillingAddress((prev) => ({ ...prev, [field]: field === 'email' ? value : value }))
       }
     } else {
       setBillingAddress((prev) => ({ ...prev, [field]: value }))
@@ -91,7 +91,16 @@ export default function CheckoutForm({ clientSecret, items }: CheckoutFormProps)
         }
       }
 
+      // Validate billing email is a real email and not guestId
+      const emailRegex = /^\S+@\S+\.\S+$/
+      if (!emailRegex.test(billingAddress.email)) {
+        setError('Please enter a valid billing email address')
+        setLoading(false)
+        return
+      }
+
       // Create order first
+      const guestId = typeof window !== 'undefined' ? localStorage.getItem('guestId') : null
       const orderResponse = await fetch("/api/orders", {
         method: "POST",
         headers: {
@@ -100,7 +109,8 @@ export default function CheckoutForm({ clientSecret, items }: CheckoutFormProps)
         body: JSON.stringify({
           items: items,
           shippingAddress: shippingAddress,
-          billingAddress: sameAsShipping ? shippingAddress : billingAddress,
+          billingAddress: sameAsShipping ? undefined : billingAddress,
+          ...(guestId ? { guestId } : {}),
         }),
       })
 

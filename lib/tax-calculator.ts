@@ -53,32 +53,10 @@ const STATE_TAX_RATES: Record<string, number> = {
   'DC': 0.06, // District of Columbia
 }
 
-// County tax rates (example for a few major counties)
-const COUNTY_TAX_RATES: Record<string, Record<string, number>> = {
-  'CA': {
-    'Los Angeles': 0.01, // 1% county tax
-    'San Diego': 0.008, // 0.8% county tax
-    'Orange': 0.0075, // 0.75% county tax
-  },
-  'NY': {
-    'New York': 0.00475, // 0.475% county tax
-    'Kings': 0.00475, // 0.475% county tax
-    'Queens': 0.00475, // 0.475% county tax
-  },
-  'TX': {
-    'Harris': 0.01, // 1% county tax
-    'Dallas': 0.01, // 1% county tax
-    'Tarrant': 0.01, // 1% county tax
-  },
-  // Add more counties as needed
-}
-
 export interface TaxCalculation {
   subtotal: number;
   stateTaxRate: number;
-  countyTaxRate: number;
   stateTaxAmount: number;
-  countyTaxAmount: number;
   totalTaxAmount: number;
   total: number;
 }
@@ -95,7 +73,7 @@ export function isValidUSAddress(address: {
   postalCode: string;
 }): boolean {
   return (
-    address.country === 'USA' &&
+    (address.country === 'US' || address.country === 'USA') &&
     isValidUSState(address.state) &&
     /^\d{5}(-\d{4})?$/.test(address.postalCode)
   )
@@ -103,29 +81,18 @@ export function isValidUSAddress(address: {
 
 export function calculateTax(
   subtotal: number,
-  state: string,
-  county?: string
+  state: string
 ): TaxCalculation {
   const stateTaxRate = STATE_TAX_RATES[state] || 0
-  const countyTaxRate = county ? (COUNTY_TAX_RATES[state]?.[county] || 0) : 0
-
   const stateTaxAmount = subtotal * stateTaxRate
-  const countyTaxAmount = subtotal * countyTaxRate
-  const totalTaxAmount = stateTaxAmount + countyTaxAmount
+  const totalTaxAmount = stateTaxAmount
   const total = subtotal + totalTaxAmount
 
   return {
     subtotal,
     stateTaxRate,
-    countyTaxRate,
     stateTaxAmount,
-    countyTaxAmount,
     totalTaxAmount,
     total
   }
-}
-
-// Helper function to get available counties for a state
-export function getCountiesForState(state: string): string[] {
-  return Object.keys(COUNTY_TAX_RATES[state] || {})
 } 

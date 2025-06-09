@@ -14,11 +14,12 @@ export default function SuccessPage() {
   const { clearCart } = useCart()
 
   useEffect(() => {
-    // Clear session storage (but do not clear cart here)
+    // Clear session storage and cart after successful checkout
     sessionStorage.removeItem('shippingAddress')
     sessionStorage.removeItem('billingAddress')
     sessionStorage.removeItem('shippingRate')
-  }, [])
+    clearCart()
+  }, [clearCart])
 
   const paymentIntent = searchParams.get('payment_intent')
   const paymentIntentClientSecret = searchParams.get('payment_intent_client_secret')

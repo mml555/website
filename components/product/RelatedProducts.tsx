@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { Product } from '@/types/product'
-import { formatPrice } from '@/lib/utils'
+import { formatPrice } from '@/lib/AppUtils'
 import ProductImage from '../ProductImage'
 
 interface RelatedProductsProps {
@@ -29,7 +29,6 @@ export default function RelatedProducts({
         const data = await response.json()
         setProducts(data)
       } catch (error) {
-        console.error('Error fetching related products:', error)
         setError(error instanceof Error ? error.message : 'Failed to fetch related products')
       } finally {
         setLoading(false)

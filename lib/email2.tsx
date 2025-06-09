@@ -1,10 +1,10 @@
 // SERVER-ONLY: Do NOT import this file in client components. Use only in API routes or server actions.
 import { Resend } from "resend";
-import React from "react";
 // import OrderConfirmationEmail from "../emails/OrderConfirmation";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// TODO: Integrate order confirmation email sending on order creation
 export async function sendOrderConfirmationEmail(
   order: {
     id: string;
@@ -38,7 +38,6 @@ export async function sendOrderConfirmationEmail(
     // });
     return true;
   } catch (error) {
-    console.error("Error sending order confirmation email:", error);
     return false;
   }
 }
@@ -85,6 +84,7 @@ function OrderShippedEmail({ order, trackingNumber }: OrderShippedEmailProps) {
   );
 }
 
+// TODO: Handle email delivery failures and retries
 export async function sendOrderShippedEmail(
   order: {
     id: string;
@@ -118,13 +118,11 @@ export async function sendOrderShippedEmail(
     });
 
     if (error) {
-      console.error("Failed to send shipping confirmation email:", error);
       return false;
     }
 
     return true;
   } catch (error) {
-    console.error("Error sending shipping confirmation email:", error);
     return false;
   }
 } 

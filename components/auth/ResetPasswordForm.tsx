@@ -47,7 +47,6 @@ export default function ResetPasswordForm() {
           throw new Error(data.message || "Something went wrong")
         }
 
-        alert("Password reset successful! Please login with your new password.")
         router.push("/login")
       } else {
         // Request password reset
@@ -67,7 +66,6 @@ export default function ResetPasswordForm() {
           throw new Error(data.message || "Something went wrong")
         }
 
-        alert("Password reset email sent! Please check your email.")
         router.push("/login")
       }
     } catch (err) {

@@ -5,6 +5,12 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { useState } from 'react'
 import LoadingSpinner from './LoadingSpinner'
+import type { CartItem } from '@/types/product'
+import Skeleton from './ui/Skeleton'
+
+// Mini-Cart / Drawer / Header Cart UI
+// This component is for use in a cart drawer, sidebar, or header. Do NOT use as the main cart page.
+// For the full cart page UI, use app/cart/CartPage.tsx instead.
 
 export default function Cart() {
   const { items, removeItem, updateQuantity, total, error, clearError, isLoading } = useCart()
@@ -32,10 +38,28 @@ export default function Cart() {
     }
   }
 
+  // Wrapper for CartItemsList prop types
+  const handleQuantityChangeWrapper = (item: CartItem, newQuantity: number) => {
+    handleQuantityChange(item.id, newQuantity, item.variantId);
+  };
+  const handleRemoveItemWrapper = (id: string) => {
+    handleRemoveItem(id);
+  };
+
   if (isLoading) {
     return (
-      <div className="min-h-[400px] flex items-center justify-center">
-        <LoadingSpinner size="lg" />
+      <div className="min-h-[400px] flex flex-col items-center justify-center">
+        <ul className="-my-6 divide-y divide-gray-200 w-full max-w-md">
+          {[...Array(2)].map((_, i) => (
+            <li key={i} className="flex py-6 animate-pulse">
+              <Skeleton className="flex-shrink-0 w-16 h-16 rounded-md bg-gray-200" />
+              <div className="ml-4 flex flex-1 flex-col space-y-2">
+                <Skeleton className="h-5 w-1/2 bg-gray-200 rounded" />
+                <Skeleton className="h-4 w-1/3 bg-gray-200 rounded" />
+              </div>
+            </li>
+          ))}
+        </ul>
       </div>
     )
   }
@@ -119,18 +143,25 @@ export default function Cart() {
           Shopping Cart
         </h1>
 
-        <div className="flow-root">
-          <ul className="-my-6 divide-y divide-gray-200" data-testid="cart-items">
-            {items.map((item) => {
-              const testId = `item-${item.productId}${item.variantId ? `-${item.variantId}` : ''}`;
-              return (
-                <li key={testId} className="py-6 flex" data-testid={testId}>
-                  {item.name} - Qty: {item.quantity}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+        <CartItemsList
+          items={items}
+          onQuantityChange={handleQuantityChangeWrapper}
+          onRemove={handleRemoveItemWrapper}
+          isUpdating={{}}
+          getItemPrice={(item) => Number(item.price) || 0}
+          showImage={false}
+          renderRemoveButton={(props) => (
+            <button
+              type="button"
+              onClick={() => props.onRemove(props.item.id)}
+              className="font-medium text-indigo-600 hover:text-indigo-500 flex items-center"
+              aria-label={`Remove ${props.item.name} from cart`}
+              disabled={props.isUpdating[props.item.id]}
+            >
+              {props.isUpdating[props.item.id] ? <LoadingSpinner size="sm" /> : 'Remove'}
+            </button>
+          )}
+        />
 
         <div className="border-t border-gray-200 py-6 px-4 sm:px-6">
           <div className="flex justify-between text-base font-medium text-gray-900">
@@ -168,4 +199,77 @@ export default function Cart() {
       </div>
     </div>
   )
+}
+
+// Shared cart items list for both mini-cart and main cart page
+interface CartItemsListProps {
+  items: CartItem[];
+  onQuantityChange: (item: CartItem, newQuantity: number) => void;
+  onRemove: (id: string) => void;
+  isUpdating: { [key: string]: boolean };
+  getItemPrice: (item: CartItem) => number;
+  showImage?: boolean;
+  renderRemoveButton?: ({ item, onRemove, isUpdating }: { item: CartItem; onRemove: (id: string) => void; isUpdating: { [key: string]: boolean } }) => React.ReactNode;
+}
+
+export function CartItemsList({ items, onQuantityChange, onRemove, isUpdating, getItemPrice, showImage = false, renderRemoveButton }: CartItemsListProps) {
+  return (
+    <ul className="-my-6 divide-y divide-gray-200" data-testid="cart-items">
+      {items.map((item: CartItem) => (
+        <li key={item.id} className="flex py-6">
+          {showImage && (
+            <div className="flex-shrink-0 w-24 h-24 border border-gray-200 rounded-md overflow-hidden">
+              <Image
+                src={item.image}
+                alt={item.name}
+                width={96}
+                height={96}
+                className="w-full h-full object-center object-cover"
+              />
+            </div>
+          )}
+          <div className={showImage ? "ml-4 flex flex-1 flex-col" : "flex-1 flex flex-col"}>
+            <div>
+              <div className="flex justify-between text-base font-medium text-gray-900">
+                <h3>{item.name}</h3>
+                <p className="ml-4">${getItemPrice(item) * item.quantity}</p>
+              </div>
+            </div>
+            <div className="flex flex-1 items-end justify-between text-sm">
+              <div className="flex items-center">
+                <label htmlFor={`quantity-${item.id}`} className="sr-only">
+                  Quantity
+                </label>
+                <select
+                  id={`quantity-${item.id}`}
+                  value={item.quantity}
+                  onChange={(e) => onQuantityChange(item, parseInt(e.target.value))}
+                  className="rounded-md border-gray-300 py-1.5 text-base leading-5 focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+                  aria-label={`Quantity for ${item.name}`}
+                  disabled={isUpdating[item.id]}
+                >
+                  {[...Array(Math.min(item.stock ?? 10, 100)).keys()].map(i => (
+                    <option key={i + 1} value={i + 1}>{i + 1}</option>
+                  ))}
+                </select>
+              </div>
+              {renderRemoveButton ? (
+                renderRemoveButton({ item, onRemove, isUpdating })
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onRemove(item.id)}
+                  className="font-medium text-indigo-600 hover:text-indigo-500 flex items-center"
+                  aria-label={`Remove ${item.name} from cart`}
+                  disabled={isUpdating[item.id]}
+                >
+                  {isUpdating[item.id] ? <LoadingSpinner size="sm" /> : 'Remove'}
+                </button>
+              )}
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
 } 

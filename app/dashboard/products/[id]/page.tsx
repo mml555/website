@@ -27,7 +27,7 @@ interface Product {
   }
 }
 
-export default function EditProductPage() {
+export default function DashboardEditProductPage() {
   const router = useRouter()
   const params = useParams()
   const productId = params?.id as string
@@ -92,7 +92,7 @@ export default function EditProductPage() {
       fetchProduct()
       fetchCategories()
     }
-  }, [productId])
+  }, [router, productId])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

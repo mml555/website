@@ -2,6 +2,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import React from 'react';
+import { formatOrderNumber } from '@/lib/order-utils';
 
 export interface OrderSummaryClientProps {
   order: {
@@ -12,10 +13,12 @@ export interface OrderSummaryClientProps {
     items: { product: { name: string; price: number }; quantity: number }[];
     shippingAddress: {
       name: string;
-      address: string;
+      email: string;
+      phone: string;
+      street: string;
       city: string;
       state: string;
-      zipCode: string;
+      postalCode: string;
       country: string;
     };
     createdAt?: string;
@@ -28,13 +31,13 @@ export default function OrderSummaryClient({ order }: OrderSummaryClientProps) {
       <h1 className="text-2xl font-bold mb-8" tabIndex={-1}>Order Confirmation</h1>
       <Card>
         <CardHeader>
-          <CardTitle>Order #{order.orderNumber || order.id}</CardTitle>
+          <CardTitle>Order #{order.orderNumber ? formatOrderNumber(order.orderNumber) : order.id}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col md:flex-row md:justify-between md:items-center">
               <span className="font-semibold">Order Number:</span>
-              <span className="text-lg">{order.id}</span>
+              <span className="text-lg">{order.orderNumber ? formatOrderNumber(order.orderNumber) : order.id}</span>
             </div>
             <div className="mb-4">
               <strong>Status:</strong> {order.status}
@@ -54,8 +57,8 @@ export default function OrderSummaryClient({ order }: OrderSummaryClientProps) {
               <strong>Shipping Address:</strong>
               <div className="text-sm text-gray-600">
                 {order.shippingAddress.name}<br />
-                {order.shippingAddress.address}<br />
-                {order.shippingAddress.city}, {order.shippingAddress.state} {order.shippingAddress.zipCode}<br />
+                {order.shippingAddress.street}<br />
+                {order.shippingAddress.city}, {order.shippingAddress.state} {order.shippingAddress.postalCode}<br />
                 {order.shippingAddress.country}
               </div>
             </div>

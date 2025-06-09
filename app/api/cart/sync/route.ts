@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
+import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
@@ -7,7 +7,7 @@ import { Decimal } from '@prisma/client/runtime/library'
 import { rateLimit } from '@/lib/rate-limit'
 import type { CartItem, DbCartItem } from '@/types/product'
 import { Redis } from '@upstash/redis'
-import { decimalToNumber } from '@/lib/utils'
+import { decimalToNumber } from '@/lib/AppUtils'
 
 // Initialize Redis client
 const redis = new Redis({
@@ -60,8 +60,8 @@ const limiter = rateLimit({
 
 export async function POST(request: Request) {
   try {
-    const session = await getServerSession(authOptions)
-    let userId = session?.user?.id || null;
+    const session = await getServerSession(authOptions as any)
+    const userId = ((session as any)?.user as any)?.id
     let guestId: string | undefined = undefined;
     let isGuest = false;
 
@@ -125,10 +125,10 @@ export async function POST(request: Request) {
     }
 
     // --- Server-side stock and variant validation ---
-    const errors: any[] = [];
-    const validItems = [];
+    const errors: Array<{ id: string; error: string; variantId?: string }> = [];
+    const validItems: CartItemInput[] = [];
     for (const item of items) {
-      const product = existingProducts.find((p: any) => p.id === item.id);
+      const product = existingProducts.find((p) => p.id === item.id);
       if (!product) {
         errors.push({ id: item.id, error: 'Product not found' });
         continue;
@@ -206,50 +206,53 @@ export async function POST(request: Request) {
       )
     }
 
-    // Update cart in database
-    const updatedCart = await prisma.cart.upsert({
-      where: { userId: user.id },
-      create: {
-        userId: user.id,
-        items: {
-          create: validItems.map(item => ({
+    // Update cart in database (atomic delete then insert)
+    let updatedCart;
+    await prisma.$transaction(async (tx) => {
+      // Find or create the cart
+      let cart = await tx.cart.findUnique({ where: { userId: user.id } });
+      if (!cart) {
+        cart = await tx.cart.create({ data: { userId: user.id } });
+      }
+      // Delete all existing items
+      await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
+      // Insert new items if any
+      if (validItems.length > 0) {
+        await tx.cartItem.createMany({
+          data: validItems.map(item => ({
+            cartId: cart.id,
             productId: item.id,
             quantity: item.quantity,
-            variantId: item.variantId
-          }))
-        }
-      },
-      update: {
-        items: {
-          deleteMany: {},
-          create: validItems.map(item => ({
-            productId: item.id,
-            quantity: item.quantity,
-            variantId: item.variantId
-          }))
-        }
-      },
-      include: {
-        items: {
-          include: {
-            product: {
-              select: {
-                id: true,
-                name: true,
-                price: true,
-                images: true,
-                stock: true,
-                sku: true,
-                variants: true
+            variantId: item.variantId || null
+          })),
+          skipDuplicates: true
+        });
+      }
+      // Fetch updated cart with items and product info
+      updatedCart = await tx.cart.findUnique({
+        where: { id: cart.id },
+        include: {
+          items: {
+            include: {
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                  price: true,
+                  images: true,
+                  stock: true,
+                  sku: true,
+                  variants: true
+                }
               }
             }
           }
         }
-      }
-    })
+      });
+    });
 
     // Transform cart items
-    const transformedItems = updatedCart.items.map((item: any) => {
+    const transformedItems = updatedCart?.items?.map((item: any) => {
       const variant = item.variantId 
         ? item.product.variants.find((v: any) => v.id === item.variantId)
         : null;

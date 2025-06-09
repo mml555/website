@@ -1,8 +1,8 @@
 /**
  * @jest-environment jsdom
  */
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import PaymentPage from '../app/checkout/payment/page';
+import { render, screen } from '@testing-library/react';
+import PaymentPage from '../app/checkout/CheckoutPaymentPage';
 import React from 'react';
 import { CartProvider } from '../lib/cart';
 
@@ -39,7 +39,11 @@ jest.mock('../lib/cart', () => ({
   })
 }));
 
-jest.mock('../components/checkout-form', () => () => <div>Mocked CheckoutForm</div>);
+jest.mock('../components/checkout-form', () => {
+  const MockedCheckoutForm = () => <div>Mocked CheckoutForm</div>;
+  MockedCheckoutForm.displayName = 'MockedCheckoutForm';
+  return MockedCheckoutForm;
+});
 
 const mockFetch = global.fetch as jest.Mock;
 
@@ -63,15 +67,12 @@ describe('PaymentPage', () => {
   });
 
   it('shows loading spinner while loading', async () => {
-    jest.resetModules();
-    jest.doMock('next-auth/react', () => ({
-      useSession: () => ({ data: null, status: 'loading' })
-    }));
-    const { default: PaymentPageWithLoading } = await import('../app/checkout/payment/page');
-    renderWithCartProvider(<PaymentPageWithLoading />);
+    const spy = jest.spyOn(require('next-auth/react'), 'useSession');
+    spy.mockReturnValue({ data: null, status: 'loading' });
+    renderWithCartProvider(<PaymentPage />);
     expect(screen.getByRole('status')).toBeInTheDocument();
     expect(screen.getByText(/Loading payment information/i)).toBeInTheDocument();
-    jest.resetModules();
+    spy.mockRestore();
   });
 
   it('shows error if payment intent fails', async () => {

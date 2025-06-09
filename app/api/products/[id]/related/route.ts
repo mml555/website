@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from 'app/lib/prisma'
-import { decimalToNumber } from '@/lib/utils'
+import { decimalToNumber } from '@/lib/AppUtils'
 
 interface ProductWithRelations {
   id: string;

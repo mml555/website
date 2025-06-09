@@ -9,6 +9,8 @@ import { Bars3Icon, XMarkIcon, MagnifyingGlassIcon } from "@heroicons/react/24/o
 import { useSession, signOut } from "next-auth/react"
 import { useRouter } from "next/navigation"
 
+// TODO: Improve accessibility (keyboard navigation, focus indicators, color contrast)
+
 const navigation = [
   { name: "Home", href: "/" },
   { name: "Products", href: "/products" },

@@ -13,10 +13,10 @@ interface Address {
   name: string;
   email: string;
   phone: string;
-  address: string;
+  street: string;
   city: string;
   state: string;
-  zipCode: string;
+  postalCode: string;
   country: string;
 }
 
@@ -25,31 +25,39 @@ interface CheckoutDetailsFormProps {
   total: number;
   onClientSecret: (clientSecret: string, orderId: string) => void;
   onError?: (err: Error) => void;
+  onSubmit: (data: {
+    shippingAddress: Address;
+    billingAddress?: Address;
+  }) => void;
+  initialData?: {
+    shippingAddress?: Address;
+    billingAddress?: Address;
+  };
 }
 
-export default function CheckoutDetailsForm({ items, total, onClientSecret, onError }: CheckoutDetailsFormProps) {
+export default function CheckoutDetailsForm({ items, total, onClientSecret, onError, onSubmit, initialData }: CheckoutDetailsFormProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sameAsShipping, setSameAsShipping] = useState(true);
   const [shippingAddress, setShippingAddress] = useState<Address>({
-    name: '',
-    email: '',
-    phone: '',
-    address: '',
-    city: '',
-    state: '',
-    zipCode: '',
-    country: 'United States',
+    name: initialData?.shippingAddress?.name || '',
+    email: initialData?.shippingAddress?.email || '',
+    phone: initialData?.shippingAddress?.phone || '',
+    street: initialData?.shippingAddress?.street || '',
+    city: initialData?.shippingAddress?.city || '',
+    state: initialData?.shippingAddress?.state || '',
+    postalCode: initialData?.shippingAddress?.postalCode || '',
+    country: initialData?.shippingAddress?.country || 'US'
   });
   const [billingAddress, setBillingAddress] = useState<Address>({
-    name: '',
-    email: '',
-    phone: '',
-    address: '',
-    city: '',
-    state: '',
-    zipCode: '',
-    country: 'United States',
+    name: initialData?.billingAddress?.name || '',
+    email: initialData?.billingAddress?.email || '',
+    phone: initialData?.billingAddress?.phone || '',
+    street: initialData?.billingAddress?.street || '',
+    city: initialData?.billingAddress?.city || '',
+    state: initialData?.billingAddress?.state || '',
+    postalCode: initialData?.billingAddress?.postalCode || '',
+    country: initialData?.billingAddress?.country || 'US'
   });
   const [emailTouched, setEmailTouched] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -92,6 +100,9 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
     }
     if (type === 'shipping') {
       setShippingAddress((prev) => ({ ...prev, [field]: val }));
+      if (sameAsShipping) {
+        setBillingAddress((prev) => ({ ...prev, [field]: field === 'email' ? val : val }));
+      }
       if (field === 'email') {
         setEmailTouched(true);
         if (!validateEmail(val)) {
@@ -102,31 +113,8 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
           setEmailSuggestion(null);
         }
       }
-      if (sameAsShipping) {
-        setBillingAddress((prev) => ({ ...prev, [field]: val }));
-        if (field === 'email') {
-          setBillingEmailTouched(true);
-          if (!validateEmail(val)) {
-            setBillingEmailError('Please enter a valid email address');
-            setBillingEmailSuggestion(suggestDomain(val));
-          } else {
-            setBillingEmailError(null);
-            setBillingEmailSuggestion(null);
-          }
-        }
-      }
     } else {
       setBillingAddress((prev) => ({ ...prev, [field]: val }));
-      if (field === 'email') {
-        setBillingEmailTouched(true);
-        if (!validateEmail(val)) {
-          setBillingEmailError('Please enter a valid email address');
-          setBillingEmailSuggestion(suggestDomain(val));
-        } else {
-          setBillingEmailError(null);
-          setBillingEmailSuggestion(null);
-        }
-      }
     }
   };
 
@@ -139,10 +127,10 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
         'name',
         'email',
         'phone',
-        'address',
+        'street',
         'city',
         'state',
-        'zipCode',
+        'postalCode',
       ];
       const missingShippingFields = requiredFields.filter((field) => !shippingAddress[field]);
       if (missingShippingFields.length > 0) {
@@ -176,6 +164,18 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
         setLoading(false);
         return;
       }
+
+      // Get shipping rate from session storage
+      const storedShippingRate = sessionStorage.getItem('shippingRate');
+      if (!storedShippingRate) {
+        throw new Error('Shipping rate not found. Please return to shipping page.');
+      }
+      const shippingRate = JSON.parse(storedShippingRate);
+
+      // Calculate total with shipping
+      const totalWithShipping = total + shippingRate.rate;
+
+      const guestId = typeof window !== 'undefined' ? localStorage.getItem('guestId') : null;
       const orderResponse = await fetch('/api/orders', {
         method: 'POST',
         headers: {
@@ -188,52 +188,56 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
             quantity: item.quantity,
             price: item.price,
           })),
-          total,
+          total: totalWithShipping,
           shippingAddress: {
             name: shippingAddress.name,
             email: shippingAddress.email,
             phone: shippingAddress.phone,
-            address: shippingAddress.address,
+            street: shippingAddress.street,
             city: shippingAddress.city,
             state: shippingAddress.state,
-            zipCode: shippingAddress.zipCode,
-            country: shippingAddress.country || 'United States',
+            postalCode: shippingAddress.postalCode,
+            country: shippingAddress.country,
           },
-          billingAddress: sameAsShipping
-            ? undefined
-            : {
-                name: billingAddress.name || shippingAddress.name,
-                email: billingAddress.email || shippingAddress.email,
-                phone: billingAddress.phone || shippingAddress.phone,
-                address: billingAddress.address,
-                city: billingAddress.city,
-                state: billingAddress.state,
-                zipCode: billingAddress.zipCode,
-                country: billingAddress.country || 'United States',
-              },
+          billingAddress: sameAsShipping ? {
+            name: shippingAddress.name,
+            email: shippingAddress.email,
+            phone: shippingAddress.phone,
+            street: shippingAddress.street,
+            city: shippingAddress.city,
+            state: shippingAddress.state,
+            postalCode: shippingAddress.postalCode,
+            country: shippingAddress.country,
+          } : {
+            name: billingAddress.name,
+            email: billingAddress.email,
+            phone: billingAddress.phone,
+            street: billingAddress.street,
+            city: billingAddress.city,
+            state: billingAddress.state,
+            postalCode: billingAddress.postalCode,
+            country: billingAddress.country,
+          },
+          shippingRate,
+          ...(guestId ? { guestId } : {}),
         }),
       });
+
       if (!orderResponse.ok) {
         const errorData = await orderResponse.json();
-        if (orderResponse.status === 409 && errorData.code === 'ACCOUNT_EXISTS') {
-          setError('An account with this email already exists. Please log in to continue your order.');
-          setLoading(false);
-          return;
-        }
+        console.error('Order creation failed:', errorData);
         throw new Error(errorData.message || 'Failed to create order');
       }
-      const orderData = await orderResponse.json();
-      if (!orderData.clientSecret || !orderData.id) {
-        throw new Error('No payment intent or order ID returned from server.');
-      }
-      onClientSecret(orderData.clientSecret, orderData.id);
-    } catch (err: any) {
-      setError(err.message || 'An error occurred during checkout');
-      if (onError) onError(err instanceof Error ? err : new Error(String(err)));
+
+      const { clientSecret, orderId } = await orderResponse.json();
+      onClientSecret(clientSecret, orderId);
+    } catch (err) {
+      console.error('Checkout error:', err);
+      setError(err instanceof Error ? err.message : 'An error occurred during checkout');
+      onError?.(err instanceof Error ? err : new Error('An error occurred during checkout'));
+    } finally {
       setLoading(false);
-      return;
     }
-    setLoading(false);
   };
 
   return (
@@ -262,7 +266,7 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
                 Email
                 <span className="ml-1 group relative">
                   <Info className="h-3 w-3 text-gray-400 group-hover:text-blue-500" />
-                  <span className="absolute left-1/2 -translate-x-1/2 mt-2 w-48 rounded bg-gray-900 text-white text-xs px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                  <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-48 rounded bg-gray-900 text-white text-xs px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
                     Required for order confirmation and digital receipts.
                   </span>
                 </span>
@@ -314,8 +318,8 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
               <Label htmlFor="shipping-address">Address</Label>
               <Input
                 id="shipping-address"
-                value={shippingAddress.address}
-                onChange={(e) => handleAddressChange('shipping', 'address', e.target.value)}
+                value={shippingAddress.street}
+                onChange={(e) => handleAddressChange('shipping', 'street', e.target.value)}
                 required
               />
             </div>
@@ -341,8 +345,8 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
               <Label htmlFor="shipping-zip">ZIP Code</Label>
               <Input
                 id="shipping-zip"
-                value={shippingAddress.zipCode}
-                onChange={(e) => handleAddressChange('shipping', 'zipCode', e.target.value)}
+                value={shippingAddress.postalCode}
+                onChange={(e) => handleAddressChange('shipping', 'postalCode', e.target.value)}
                 required
               />
             </div>
@@ -378,7 +382,7 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
         <CardContent>
           {!sameAsShipping && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
+              <div>
                 <Label htmlFor="billing-name">Full Name</Label>
                 <Input
                   id="billing-name"
@@ -387,51 +391,7 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
                   required
                 />
               </div>
-              <div className="space-y-2 relative">
-                <Label htmlFor="billing-email" className="flex items-center gap-1">
-                  <Mail className="h-4 w-4" />
-                  Email
-                  <span className="ml-1 group relative">
-                    <Info className="h-3 w-3 text-gray-400 group-hover:text-blue-500" />
-                    <span className="absolute left-1/2 -translate-x-1/2 mt-2 w-48 rounded bg-gray-900 text-white text-xs px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                      Required for billing confirmation and digital receipts.
-                    </span>
-                  </span>
-                  {billingEmailTouched && !billingEmailError && validateEmail(billingAddress.email) && (
-                    <CheckCircle className="h-4 w-4 text-green-500 ml-1" />
-                  )}
-                </Label>
-                <Input
-                  id="billing-email"
-                  type="email"
-                  value={billingAddress.email}
-                  onChange={(e) => handleAddressChange('billing', 'email', e.target.value)}
-                  required
-                  aria-invalid={!!billingEmailError}
-                  aria-describedby="billing-email-error billing-email-suggestion"
-                  className={billingEmailError ? 'border-red-500 focus:border-red-500' : ''}
-                  placeholder="you@example.com"
-                  autoComplete="email"
-                  spellCheck={false}
-                  onPaste={(e) => e.preventDefault()}
-                />
-                <p className="text-xs text-gray-500">Billing confirmation will be sent here.</p>
-                {billingEmailSuggestion && !billingEmailError && (
-                  <p
-                    id="billing-email-suggestion"
-                    className="text-xs text-blue-600 mt-1 cursor-pointer"
-                    onClick={() => handleAddressChange('billing', 'email', billingEmailSuggestion!)}
-                  >
-                    Did you mean <span className="underline">{billingEmailSuggestion}</span>?
-                  </p>
-                )}
-                {billingEmailError && billingEmailTouched && (
-                  <p id="billing-email-error" className="text-xs text-red-600 mt-1">
-                    {billingEmailError}
-                  </p>
-                )}
-              </div>
-              <div className="space-y-2">
+              <div>
                 <Label htmlFor="billing-phone">Phone</Label>
                 <Input
                   id="billing-phone"
@@ -441,16 +401,16 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
                   required
                 />
               </div>
-              <div className="md:col-span-2 space-y-2">
+              <div className="md:col-span-2">
                 <Label htmlFor="billing-address">Address</Label>
                 <Input
                   id="billing-address"
-                  value={billingAddress.address}
-                  onChange={(e) => handleAddressChange('billing', 'address', e.target.value)}
+                  value={billingAddress.street}
+                  onChange={(e) => handleAddressChange('billing', 'street', e.target.value)}
                   required
                 />
               </div>
-              <div className="space-y-2">
+              <div>
                 <Label htmlFor="billing-city">City</Label>
                 <Input
                   id="billing-city"
@@ -459,7 +419,7 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
                   required
                 />
               </div>
-              <div className="space-y-2">
+              <div>
                 <Label htmlFor="billing-state">State</Label>
                 <Input
                   id="billing-state"
@@ -468,16 +428,16 @@ export default function CheckoutDetailsForm({ items, total, onClientSecret, onEr
                   required
                 />
               </div>
-              <div className="space-y-2">
+              <div>
                 <Label htmlFor="billing-zip">ZIP Code</Label>
                 <Input
                   id="billing-zip"
-                  value={billingAddress.zipCode}
-                  onChange={(e) => handleAddressChange('billing', 'zipCode', e.target.value)}
+                  value={billingAddress.postalCode}
+                  onChange={(e) => handleAddressChange('billing', 'postalCode', e.target.value)}
                   required
                 />
               </div>
-              <div className="space-y-2">
+              <div>
                 <Label htmlFor="billing-country">Country</Label>
                 <Input
                   id="billing-country"

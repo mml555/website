@@ -15,9 +15,6 @@ export class ApiError extends Error {
 }
 
 export function handleApiError(error: unknown) {
-  // Log to console instead of Sentry
-  console.error(error)
-
   if (error instanceof ApiError) {
     return NextResponse.json(
       {

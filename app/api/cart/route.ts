@@ -2,9 +2,8 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { decimalToNumber } from '@/lib/utils';
-import redis, { getJsonFromRedis, withRedis } from '@/lib/redis';
-import { headers } from 'next/headers';
+import { decimalToNumber } from '@/lib/AppUtils';
+import { getJsonFromRedis, withRedis } from '@/lib/redis';
 import type { DbCartItem } from '@/types/product';
 
 // Cache TTL in seconds

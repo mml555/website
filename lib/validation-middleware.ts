@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { ApiError } from './api-error-handler'

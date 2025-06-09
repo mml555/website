@@ -34,7 +34,6 @@ export async function importProductsFromExcel(file: File) {
 
     return products
   } catch (error) {
-    console.error('Error importing products:', error)
     throw new Error('Failed to import products from Excel file')
   }
 } 

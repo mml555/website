@@ -1,8 +1,8 @@
 /**
  * @jest-environment jsdom
  */
-import { render, screen, waitFor } from '@testing-library/react';
-import OrderConfirmationPage from '../app/order-confirmation/page';
+import { render, screen } from '@testing-library/react';
+import OrderConfirmationPage from '../app/order-confirmation/OrderConfirmationPage';
 import React from 'react';
 import { CartProvider } from '../lib/cart';
 import OrderSummaryClient from '../app/order-confirmation/OrderSummaryClient';
@@ -77,11 +77,13 @@ describe('OrderConfirmationPage', () => {
         { product: { name: 'Test Product', price: 50 }, quantity: 2 }
       ],
       shippingAddress: {
-        name: 'Test User',
-        address: '123 Main',
-        city: 'Town',
+        name: 'John Doe',
+        email: 'john@example.com',
+        phone: '123-456-7890',
+        street: '123 Main',
+        city: 'Los Angeles',
         state: 'CA',
-        zipCode: '90001',
+        postalCode: '90001',
         country: 'USA'
       },
       createdAt: new Date().toISOString()

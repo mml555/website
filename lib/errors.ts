@@ -18,16 +18,16 @@ export function logError(error: unknown, context?: string) {
   const appError = handleError(error)
   
   if (env.NODE_ENV === 'development') {
-    console.error(`[${appError.code}] ${context || ''}:`, {
-      message: appError.message,
-      statusCode: appError.statusCode,
-      details: appError.details,
-      stack: appError.stack,
-    })
+    // In development, log to console
+    // Example: console.error(`[${appError.code}] ${context || ''}:`, {
+    //   message: appError.message,
+    //   statusCode: appError.statusCode,
+    //   details: appError.details,
+    //   stack: appError.stack,
+    // })
   } else {
     // In production, log to your error tracking service
     // Example: Sentry.captureException(appError)
-    console.error(`[${appError.code}] ${context || ''}: ${appError.message}`)
   }
   
   return appError

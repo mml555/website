@@ -37,8 +37,8 @@ class CartOperationQueue {
       const operation = this.queue[0];
       // Process operation here
       this.queue.shift();
-    } catch (error) {
-      console.error('Error processing cart operation:', error);
+    } catch {
+      // Remove all console.error and console.warn statements
     } finally {
       this.processing = false;
       if (this.queue.length > 0) {

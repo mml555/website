@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter, useParams } from "next/navigation"
 
-export default function EditCategoryPage() {
+export default function DashboardEditCategoryPage() {
   const router = useRouter()
   const params = useParams()
   const categoryId = params?.categoryId as string

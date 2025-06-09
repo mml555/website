@@ -1,3 +1,6 @@
+/**
+ * @jest-environment node
+ */
 import { isStripeTestMode, getStripeEnvStatus } from '../lib/stripe-server';
 describe('Stripe helpers', () => {
   const OLD_ENV = process.env;
