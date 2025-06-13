@@ -2,15 +2,15 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { OrderStatus } from '@prisma/client'
+import { Prisma } from '@prisma/client';
 
-const ALLOWED_STATUSES = ['PENDING', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED'];
+type OrderStatus = 'PENDING' | 'PAID' | 'PROCESSING' | 'SHIPPED' | 'DELIVERED' | 'CANCELLED';
 
 // @ts-expect-error Next.js provides context dynamically
 export async function GET(req: Request, context) {
   const id = context.params.id;
-  const session = await getServerSession(authOptions as any);
-  if (!session || (session.user as any)?.role !== 'ADMIN') {
+  const session = await getServerSession(authOptions);
+  if (!session?.user || session.user.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   if (!id) {
@@ -34,8 +34,8 @@ export async function GET(req: Request, context) {
 // @ts-expect-error Next.js provides context dynamically
 export async function PATCH(req: Request, context) {
   const id = context.params.id;
-  const session = await getServerSession(authOptions as any);
-  if (!session || (session.user as any)?.role !== 'ADMIN') {
+  const session = await getServerSession(authOptions);
+  if (!session?.user || session.user.role !== 'ADMIN') {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   if (!id) {
@@ -43,13 +43,13 @@ export async function PATCH(req: Request, context) {
   }
   const body = await req.json();
   const { status } = body;
-  if (!status || typeof status !== 'string' || !ALLOWED_STATUSES.includes(status)) {
+  if (!status || typeof status !== 'string' || !['PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED'].includes(status)) {
     return NextResponse.json({ error: 'Missing or invalid status' }, { status: 400 });
   }
   try {
     const order = await prisma.order.update({
       where: { id },
-      data: { status: OrderStatus[status as keyof typeof OrderStatus] },
+      data: { status: status as OrderStatus },
     });
     return NextResponse.json(order);
   } catch (err) {

@@ -14,17 +14,20 @@ export function handleError(error: unknown): AppError {
   return new AppError('An unexpected error occurred')
 }
 
-export function logError(error: unknown, context?: string) {
+type LogContext = string | Record<string, unknown> | null | undefined
+type LogError = unknown | null | undefined
+
+export function logError(error: LogError, context?: LogContext) {
   const appError = handleError(error)
+  const contextStr = typeof context === 'string' ? context : JSON.stringify(context || {})
   
   if (env.NODE_ENV === 'development') {
-    // In development, log to console
-    // Example: console.error(`[${appError.code}] ${context || ''}:`, {
-    //   message: appError.message,
-    //   statusCode: appError.statusCode,
-    //   details: appError.details,
-    //   stack: appError.stack,
-    // })
+    console.error(`[${appError.code}] ${contextStr}:`, {
+      message: appError.message,
+      statusCode: appError.statusCode,
+      details: appError.details,
+      stack: appError.stack,
+    })
   } else {
     // In production, log to your error tracking service
     // Example: Sentry.captureException(appError)

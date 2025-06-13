@@ -5,7 +5,9 @@ import { prisma } from '@/lib/prisma'
 import { authOptions } from '@/lib/auth'
 // import { captureException } from '@sentry/nextjs'
 import { validateCsrfToken } from '@/lib/csrf'
-import redis, { withRedis } from '@/lib/redis'
+import { withRedis, getJsonFromRedis, setCacheWithExpiry, clearCache } from '@/lib/redis'
+import { logger } from '@/lib/logger'
+import { monitoring } from '@/lib/monitoring'
 
 // --- Zod Schemas ---
 const querySchema = z.object({
@@ -82,124 +84,160 @@ interface ProductWithCategory {
 
 // Cache configuration
 const CACHE_DURATION = 5 * 60; // 5 minutes in seconds
-const cache = new Map<string, { data: any; timestamp: number }>();
 
 function getCacheKey(url: string): string {
   return `products:${url}`;
 }
 
-function getCachedData(key: string) {
-  const cached = cache.get(key);
-  if (cached && Date.now() - cached.timestamp < CACHE_DURATION * 1000) {
-    return cached.data;
-  }
-  return null;
+async function getCachedData(key: string) {
+  return monitoring.measureAsync('get_cached_products', async () => {
+    try {
+      const cached = await getJsonFromRedis<{ data: any; timestamp: number }>(key);
+      if (cached && cached.data && cached.timestamp) {
+        if (Date.now() - cached.timestamp < CACHE_DURATION * 1000) {
+          logger.debug('Cache hit for products', { key });
+          return cached.data;
+        }
+        logger.debug('Cache expired for products', { key });
+      }
+      return null;
+    } catch (error) {
+      logger.warn('Cache read error:', error);
+      return null;
+    }
+  }, { operation: 'cache_read' });
 }
 
-function setCachedData(key: string, data: any) {
-  cache.set(key, {
-    data,
-    timestamp: Date.now()
-  });
+async function setCachedData(key: string, data: any) {
+  return monitoring.measureAsync('set_cached_products', async () => {
+    try {
+      await setCacheWithExpiry(key, {
+        data,
+        timestamp: Date.now()
+      }, CACHE_DURATION);
+      logger.debug('Cache set for products', { key });
+    } catch (error) {
+      logger.warn('Failed to cache data:', error);
+    }
+  }, { operation: 'cache_write' });
 }
 
 async function invalidateProductAndCategoryCache() {
-  if (!redis) return;
-  await withRedis(async (r) => {
-    const productKeys = await r.keys('products:*');
-    const categoryKeys = await r.keys('categories:*');
-    const keys = [...productKeys, ...categoryKeys];
-    if (keys.length > 0) {
-      await r.del(...keys);
+  return monitoring.measureAsync('invalidate_cache', async () => {
+    try {
+      await clearCache('products:*');
+      await clearCache('categories:*');
+      logger.info('Product and category cache cleared');
+    } catch (error) {
+      logger.error('Failed to clear cache:', error);
     }
-  }, undefined);
+  }, { operation: 'cache_invalidation' });
 }
 
 export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const query = Object.fromEntries(searchParams.entries())
-    const parsed = querySchema.safeParse(query)
-    if (!parsed.success) {
-      return new Response(JSON.stringify({ error: 'Invalid query parameters', details: parsed.error.format() }), { status: 400 })
+  return monitoring.measureAsync('get_products', async () => {
+    try {
+      const { searchParams } = new URL(request.url);
+      const query = Object.fromEntries(searchParams.entries());
+      const parsed = querySchema.safeParse(query);
+      
+      if (!parsed.success) {
+        logger.warn('Invalid query parameters', { error: parsed.error.format() });
+        return new Response(JSON.stringify({ error: 'Invalid query parameters', details: parsed.error.format() }), { status: 400 });
+      }
+
+      const {
+        search,
+        category,
+        minPrice,
+        maxPrice,
+        stockFilter = 'all',
+        sortBy = 'newest',
+        page = 1,
+        limit = 10
+      } = parsed.data;
+
+      // Try to get from cache first
+      const cacheKey = getCacheKey(request.url);
+      const cachedData = await getCachedData(cacheKey);
+      if (cachedData) {
+        return new Response(JSON.stringify(cachedData), { status: 200 });
+      }
+
+      // Build price filter
+      let priceFilter: any = {};
+      if (typeof minPrice === 'number') priceFilter.gte = minPrice;
+      if (typeof maxPrice === 'number') priceFilter.lte = maxPrice;
+
+      const where: any = {
+        ...(search && { name: { contains: search, mode: 'insensitive' } }),
+        ...(category && { categoryId: category }),
+        ...(Object.keys(priceFilter).length > 0 && { price: priceFilter }),
+        ...(stockFilter === 'in_stock' && { stock: { gt: 0 } }),
+        ...(stockFilter === 'out_of_stock' && { stock: 0 }),
+      };
+
+      let orderBy: any = { createdAt: 'desc' };
+      switch (sortBy) {
+        case 'price_asc':
+          orderBy = { price: 'asc' };
+          break;
+        case 'price_desc':
+          orderBy = { price: 'desc' };
+          break;
+        case 'name_asc':
+          orderBy = { name: 'asc' };
+          break;
+        case 'name_desc':
+          orderBy = { name: 'desc' };
+          break;
+        case 'stock_desc':
+          orderBy = { stock: 'desc' };
+          break;
+        case 'newest':
+        default:
+          orderBy = { createdAt: 'desc' };
+          break;
+      }
+
+      const skip = (page - 1) * limit;
+      const [products, total] = await Promise.all([
+        prisma.product.findMany({
+          where,
+          orderBy,
+          skip,
+          take: limit,
+          include: {
+            category: { select: { id: true, name: true } },
+            variants: true,
+          },
+        }),
+        prisma.product.count({ where }),
+      ]);
+
+      // Transform price fields to numbers
+      const productsWithNumberFields = products.map((p: any) => ({
+        ...p,
+        price: typeof p.price === 'object' && 'toNumber' in p.price ? p.price.toNumber() : Number(p.price),
+        cost: p.cost ? (typeof p.cost === 'object' && 'toNumber' in p.cost ? p.cost.toNumber() : Number(p.cost)) : null,
+        salePrice: p.salePrice ? (typeof p.salePrice === 'object' && 'toNumber' in p.salePrice ? p.salePrice.toNumber() : Number(p.salePrice)) : null,
+      }));
+
+      const pages = Math.ceil(total / limit);
+      const pagination = { total, page, limit, pages };
+      const response = { products: productsWithNumberFields, pagination };
+
+      // Cache the result
+      await setCachedData(cacheKey, response);
+
+      logger.info('Products fetched successfully', { count: products.length, total, page, limit });
+      return new Response(JSON.stringify(response), { status: 200 });
+    } catch (error) {
+      logger.error('Error fetching products:', error);
+      monitoring.trackError(error as Error, { endpoint: '/api/products' });
+      return new Response(JSON.stringify({ error: 'Failed to fetch products' }), { status: 500 });
     }
-    const {
-      search,
-      category,
-      minPrice,
-      maxPrice,
-      stockFilter = 'all',
-      sortBy = 'newest',
-      page = 1,
-      limit = 10
-    } = parsed.data
-
-    // Build price filter separately to avoid using 'where' before declaration
-    let priceFilter: any = {}
-    if (typeof minPrice === 'number') priceFilter.gte = minPrice
-    if (typeof maxPrice === 'number') priceFilter.lte = maxPrice
-
-    const where: any = {
-      ...(search && { name: { contains: search, mode: 'insensitive' } }),
-      ...(category && { categoryId: category }),
-      ...(Object.keys(priceFilter).length > 0 && { price: priceFilter }),
-      ...(stockFilter === 'in_stock' && { stock: { gt: 0 } }),
-      ...(stockFilter === 'out_of_stock' && { stock: 0 }),
-    }
-
-    let orderBy: any = { createdAt: 'desc' }
-    switch (sortBy) {
-      case 'price_asc':
-        orderBy = { price: 'asc' }
-        break
-      case 'price_desc':
-        orderBy = { price: 'desc' }
-        break
-      case 'name_asc':
-        orderBy = { name: 'asc' }
-        break
-      case 'name_desc':
-        orderBy = { name: 'desc' }
-        break
-      case 'stock_desc':
-        orderBy = { stock: 'desc' }
-        break
-      case 'newest':
-      default:
-        orderBy = { createdAt: 'desc' }
-        break
-    }
-
-    const skip = (page - 1) * limit
-    const [products, total] = await Promise.all([
-      prisma.product.findMany({
-        where,
-        orderBy,
-        skip,
-        take: limit,
-        include: {
-          category: { select: { id: true, name: true } },
-          variants: true,
-        },
-      }),
-      prisma.product.count({ where }),
-    ])
-
-    // Transform price fields to numbers if needed
-    const productsWithNumberFields = products.map((p: any) => ({
-      ...p,
-      price: typeof p.price === 'object' && 'toNumber' in p.price ? p.price.toNumber() : Number(p.price),
-      cost: p.cost ? (typeof p.cost === 'object' && 'toNumber' in p.cost ? p.cost.toNumber() : Number(p.cost)) : null,
-      salePrice: p.salePrice ? (typeof p.salePrice === 'object' && 'toNumber' in p.salePrice ? p.salePrice.toNumber() : Number(p.salePrice)) : null,
-    }))
-
-    const pages = Math.ceil(total / limit)
-    const pagination = { total, page, limit, pages }
-
-    return new Response(JSON.stringify({ products: productsWithNumberFields, pagination }), { status: 200 })
-  } catch (error) {
-    return new Response(JSON.stringify({ error: 'Failed to fetch products' }), { status: 500 })
-  }
+  }, { endpoint: '/api/products' });
 }
 
 export async function POST(request: Request) {

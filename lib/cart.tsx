@@ -1,9 +1,11 @@
 "use client";
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo, ReactNode } from "react";
 import { useSession } from "next-auth/react";
-import debounce from 'lodash/debounce';
-import { handleApiError } from '@/lib/AppUtils';
-import type { CartItem } from '../types/product';
+import { getGuestCart, syncCartWithServer } from '@/lib/redis';
+import { debounce } from 'lodash';
+import { handleApiError, validatePrice } from '@/lib/AppUtils';
+import type { CartItem, CartItemInput, CartContextType, CartState, BaseCartItem, ProductCartItem } from '@/types/cart';
+import { isBaseCartItem, isProductCartItem } from '@/types/cart';
 import {
   loadCartState,
   validateCartItem,
@@ -13,14 +15,36 @@ import { useRouter } from "next/navigation";
 import { toast } from "react-hot-toast";
 import { AppError } from './app-errors';
 import { v4 as uuidv4 } from 'uuid';
+import { generateCartItemId } from './cart-utils';
+import { logger } from '@/lib/logger';
+import { useToast } from '@/components/ui/use-toast';
+import { CartError, CartErrorCodes, handleCartError, createCartBackup, restoreFromBackup } from './cart-error';
 
-export interface CartItemInput {
-    productId: string;
-    variantId?: string;
+interface CartChange {
+  id: string;
+  productId: string;
+  quantity: number;
+  originalQuantity?: number;
+  price: number;
+  originalPrice?: number;
+  name: string;
+  image?: string;
+  stock?: number;
+  stockAtAdd?: number;
+  variantId?: string;
+  type?: 'add' | 'remove' | 'update' | 'clear';
+  product?: {
+    id: string;
     name: string;
     price: number;
-    image: string;
-    stock?: number;
+    images: string[];
+    stock: number;
+  };
+  variant?: {
+    id: string;
+    name: string;
+    type: string;
+  } | null;
 }
 
 export interface CartContextType {
@@ -44,6 +68,16 @@ export interface CartContextType {
     savedForLater: CartItem[];
     moveToSaveForLater: (id: string, variantId?: string) => void;
     moveToCartFromSaveForLater: (id: string, variantId?: string) => void;
+}
+
+export interface CartItemInput {
+    productId: string;
+    variantId?: string;
+    name: string;
+    price: number;
+    image?: string;
+    quantity: number;
+    stock?: number;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -74,7 +108,8 @@ const COOLDOWN_PERIOD = 300000; // 5 minutes
 
 // Retry configuration
 const MAX_RETRIES = 3;
-const RETRY_DELAY = 1000; // 1 second
+const INITIAL_RETRY_DELAY = 1000;
+const MAX_RETRY_DELAY = 30000;
 
 // Debounce configuration
 const DEBOUNCE_DELAY = 3000; // 3 seconds
@@ -103,41 +138,47 @@ function mergeCarts(localItems: CartItem[], serverItems: CartItem[]): CartItem[]
     return Array.from(merged.values());
 }
 
+// Add type guard for CartItem
+const isCartItem = (item: unknown): item is CartItem => {
+  return (
+    typeof item === 'object' &&
+    item !== null &&
+    'id' in item &&
+    'productId' in item &&
+    'quantity' in item &&
+    'price' in item &&
+    'name' in item
+  );
+};
+
 export function CartProvider({ children }: CartProviderProps) {
-    // TODO: Add cart sharing logic (UI, API integration)
-    // TODO: Add save for later logic (UI, state management, persistence)
+    const isClient = typeof window !== 'undefined';
     const { data: session, status } = useSession();
+    const router = useRouter();
+    const { toast } = useToast();
     const [items, setItems] = useState<CartItem[]>([]);
     const [total, setTotal] = useState(0);
     const [itemCount, setItemCount] = useState(0);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<Error | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [pendingChanges, setPendingChanges] = useState<CartItem[]>([]);
-    const [isClient, setIsClient] = useState(false);
-    const localStorageAvailable = isClient && typeof window !== 'undefined' && window.localStorage;
-    const isSyncing = useRef(false);
+    const [cartLoaded, setCartLoaded] = useState(false);
+    const [savedForLater, setSavedForLater] = useState<CartItem[]>([]);
     const [rateLimitCooldown, setRateLimitCooldown] = useState(false);
+    const [guestId, setGuestId] = useState<string | null>(null);
+    const cooldownTimeoutRef = useRef<NodeJS.Timeout>();
+    const userInitiatedRef = useRef(false);
+    const hasMergedRef = useRef(false);
+    const prevStatusRef = useRef(status);
+    const previouslyAuthenticatedRef = useRef(false);
+    const localStorageAvailable = isClient && isLocalStorageAvailable();
+    const isSyncing = useRef(false);
     const [debounceInterval, setDebounceInterval] = useState(INITIAL_DEBOUNCE);
     const itemsRef = useRef(items);
-    const router = useRouter();
     const retryCount = useRef(0);
     const timeoutRef = useRef<NodeJS.Timeout>();
-    const cooldownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    // Track previous session status to detect login transition and logout
-    const prevStatusRef = useRef<string | undefined>(undefined);
-    const previouslyAuthenticatedRef = useRef(false);
-    // Add a ref to ensure merge only happens once per login
-    const hasMergedRef = useRef(false);
-    const [cartLoaded, setCartLoaded] = useState(false);
-    const [guestId, setGuestId] = useState<string | null>(null);
-    // Add a ref to track if the cart update is user-initiated
-    const userInitiatedRef = useRef(false);
-    // Add a ref to track the last sync time
     const lastSyncTimeRef = useRef<number>(0);
-    // Guest cart expiry warning
     const [cartExpiryWarning, setCartExpiryWarning] = useState<string | null>(null);
-    // --- Save for Later ---
-    const [savedForLater, setSavedForLater] = useState<CartItem[]>([]);
 
     // --- Mutation queue for atomic cart updates ---
     const mutationQueue = useRef<(() => Promise<void>)[]>([]);
@@ -158,199 +199,251 @@ export function CartProvider({ children }: CartProviderProps) {
         runNextMutation();
     }, [runNextMutation]);
 
+    // Initialize guestId immediately for unauthenticated users
+    useEffect(() => {
+        if (!isClient) return;
+        if (status === 'authenticated') {
+            setGuestId(null);
+            return;
+        }
+        let storedGuestId = null;
+        try {
+            storedGuestId = localStorage.getItem('guestId');
+        } catch {}
+        if (!storedGuestId) {
+            storedGuestId = uuidv4();
+            try {
+                localStorage.setItem('guestId', storedGuestId);
+            } catch {}
+        }
+        setGuestId(storedGuestId);
+    }, [isClient, status]);
+
     // Keep itemsRef in sync with items state
     useEffect(() => {
         itemsRef.current = items;
     }, [items]);
 
-    // Set isClient to true when component mounts
-    useEffect(() => {
-        setIsClient(true);
+    // Memoized setItems function that preserves existing items
+    const setItemsWithPreservation = useCallback((newItems: CartItem[]) => {
+        setItems(prevItems => {
+            const itemMap = new Map(prevItems.map((item: CartItem) => [item.id, item]));
+            newItems.forEach((item: CartItem) => {
+                if (isBaseCartItem(item) || isProductCartItem(item)) {
+                    itemMap.set(item.id, item);
+                } else {
+                    logger.warn(item, 'Invalid cart item found during preservation');
+                }
+            });
+            return Array.from(itemMap.values());
+        });
     }, []);
 
-    // Calculate total and item count whenever items change
-    useEffect(() => {
-        const safeItems = items ?? [];
-        const newTotal = safeItems.reduce((sum, item) => {
-            const itemPrice = typeof item.price === 'string' ? parseFloat(item.price) : item.price;
-            const itemQuantity = typeof item.quantity === 'string' ? parseInt(item.quantity) : item.quantity;
-            if (!itemPrice || !itemQuantity || isNaN(itemPrice) || isNaN(itemQuantity) || itemQuantity <= 0) {
-                return sum;
-            }
-            const itemTotal = itemPrice * itemQuantity;
-            return sum + (isNaN(itemTotal) ? 0 : itemTotal);
-        }, 0);
+    // Cleanup function for timeouts
+    const cleanupTimeouts = useCallback(() => {
+        if (cooldownTimeoutRef.current) {
+            clearTimeout(cooldownTimeoutRef.current);
+        }
+        if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+        }
+    }, []);
 
-        const newItemCount = safeItems.reduce((sum, item) => {
-            const itemQuantity = typeof item.quantity === 'string' ? parseInt(item.quantity) : item.quantity;
-            return sum + (isNaN(itemQuantity) ? 0 : itemQuantity);
-        }, 0);
-
-        setTotal(newTotal);
-        setItemCount(newItemCount);
-    }, [items]);
-
-    // Only persist cart state if session is defined and status !== 'loading'
-    const persistCartState = useCallback((currentItems: CartItem[], currentPendingChanges: CartItem[] = []) => {
-        if (!isClient || status === 'loading') return;
-        if (typeof window !== 'undefined') {
-            // Always persist cart for guests (unauthenticated), even if empty
-            if (currentItems.length === 0 && status !== 'unauthenticated') {
-                return;
-            }
+    // Debounced sync function with exponential backoff
+    const debouncedSyncCart = useMemo(() => 
+        debounce(async (itemsToSync: CartItem[]) => {
+            if (!isClient || status === 'loading') return;
+            
             try {
-                const cartState = {
-                    items: Array.isArray(currentItems) ? currentItems : [],
-                    pendingChanges: Array.isArray(currentPendingChanges) ? currentPendingChanges : [],
-                    lastSynced: new Date().toISOString(),
-                    version: '1.0',
-                };
-                localStorage.setItem('cartState', JSON.stringify(cartState));
-            } catch (err) {
-            }
-        }
-    }, [isClient, status]);
+                logger.debug(itemsToSync, 'Syncing cart with server');
+                const response = await fetch('/api/cart/sync', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        items: itemsToSync,
+                        guestId: status === 'unauthenticated' ? guestId : undefined
+                    }),
+                });
 
-    // On mount or when status changes, load cart from localStorage for guests
-    useEffect(() => {
-        if (!isClient || status === 'loading') return;
-        if (status === 'unauthenticated') {
-            const cartState = loadCartState();
-            const validItems = Array.isArray(cartState?.items) ? cartState.items.filter(validateCartItem) : [];
-            if (cartState && validItems.length !== (cartState.items?.length || 0)) {
-                persistCartState(validItems, []);
-            }
-            setItems(validItems);
-            setPendingChanges([]);
-            setIsLoading(false); // Set loading to false after loading cart
-            setCartLoaded(true);
-            if (cartState && (cartState.items as any[])?.some((item: any) => !item.productId)) {
-            }
-        }
-    }, [isClient, status, persistCartState]);
+                if (!response.ok) {
+                    throw new Error('Failed to sync cart');
+                }
 
-    // Sync cart with server
-    const syncCart = useCallback(async (itemsToSync: CartItem[]) => {
-        if (rateLimitCooldown) {
-            setError("You're making changes too quickly. Please wait a moment and try again.");
-            toast.error("You're making changes too quickly. Please wait a moment and try again.");
-            return;
-        }
+                const data = await response.json();
+                logger.debug(data, 'Cart sync response');
+
+                if (data.items && JSON.stringify(data.items) !== JSON.stringify(itemsToSync)) {
+                    logger.debug('Updating items from sync response');
+                    setItemsWithPreservation(data.items);
+                }
+
+                // Reset retry state on success
+                retryCount.current = 0;
+                setDebounceInterval(INITIAL_DEBOUNCE);
+                setPendingChanges([]);
+            } catch (error) {
+                logger.error(error, 'Error syncing cart');
+                setError(error instanceof Error ? error : new Error('Failed to sync cart with server'));
+                
+                // Implement exponential backoff
+                if (retryCount.current < MAX_RETRIES) {
+                    const nextDelay = Math.min(debounceInterval, MAX_RETRY_DELAY);
+                    setDebounceInterval(nextDelay);
+                    retryCount.current++;
+                    
+                    timeoutRef.current = setTimeout(() => {
+                        debouncedSyncCart(itemsToSync);
+                    }, nextDelay);
+                }
+            }
+        }, 1000)
+    , [isClient, status, setItemsWithPreservation, retryCount, debounceInterval]);
+
+    // Update the syncCart function to handle IDs consistently
+    const syncCart = useCallback(async (items: CartItem[]) => {
         try {
-            setIsLoading(true);
-            setError(null);
-
-            // Filter out invalid items before mapping
-            // Ensure all items have productId (fallback to id)
-            const normalizedItems = itemsToSync.map(item => ({ ...item, productId: item.productId || item.id }));
-            // Defensive: filter out items with missing/invalid productId
-            const filteredItems = normalizedItems.filter(item => typeof item.productId === 'string' && !!item.productId);
-            const validItems = filteredItems.filter(validateCartItem);
-            if (validItems.length !== itemsToSync.length) {
-            }
-            const apiItems = validItems.map(item => ({
-                id: item.productId,
-                quantity: item.quantity,
-                ...(typeof item.variantId === 'string' && item.variantId ? { variantId: item.variantId } : {}),
-                ...(typeof item.stockAtAdd === 'number' ? { stockAtAdd: item.stockAtAdd } : {}),
-            }));
-
-            // Send guestId for guests, not for authenticated users
-            const body: any = { items: apiItems };
-            if (!session?.user && guestId) {
-                body.guestId = guestId;
-            }
-
+            logger.debug('Syncing cart with server');
             const response = await fetch('/api/cart/sync', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(body),
+                body: JSON.stringify({
+                    items: items.map((item: CartItem) => ({
+                        id: item.id,
+                        productId: item.productId,
+                        variantId: item.variantId,
+                        quantity: item.quantity,
+                        price: item.price,
+                        name: item.name,
+                        image: item.image,
+                        stock: item.stock
+                    }))
+                })
             });
 
             if (!response.ok) {
-                if (response.status === 429) {
-                    setError("You're making changes too quickly. Please wait a moment and try again.");
-                    toast.error("You're making changes too quickly. Please wait a moment and try again.");
-                    setRateLimitCooldown(true);
-                    if (cooldownTimeoutRef.current) clearTimeout(cooldownTimeoutRef.current);
-                    cooldownTimeoutRef.current = setTimeout(() => {
-                        setRateLimitCooldown(false);
-                        setError(null);
-                    }, RATE_LIMIT_COOLDOWN_MS);
-                    return;
-                }
-                if (response.status === 404) {
-                    let errorBody: any = {};
-                    try {
-                        errorBody = await response.json();
-                    } catch {
-                        errorBody = {};
-                    }
-                    if (errorBody && Array.isArray(errorBody.missingProducts) && errorBody.missingProducts.length > 0) {
-                        const remainingItems = items.filter(item => !errorBody.missingProducts.includes(item.productId));
-                        setItems(remainingItems);
-                        setPendingChanges([]);
-                        persistCartState(remainingItems, []);
-                        setError('Some products in your cart are no longer available and have been removed.');
-                        toast('Some products in your cart are no longer available and have been removed.', { icon: '⚠️' });
-                        return;
-                    }
-                }
-                let errorText = '';
-                try {
-                    errorText = await response.text();
-                } catch {
-                    errorText = 'Unknown error';
-                }
-                setError('Failed to sync cart: ' + errorText);
-                toast.error('Failed to sync cart: ' + errorText);
-                throw new AppError(errorText || 'Failed to sync cart', response.status);
+                throw new Error('Failed to sync cart');
             }
 
-            const data = await response.json() as { items?: CartItem[] };
-            if (data && Array.isArray(data.items)) {
-                // Ensure all items have productId (fallback to id)
-                const normalizedServerItems = data.items.map(item => ({ ...item, productId: item.productId || item.id }));
-                setItems(normalizedServerItems);
-                setPendingChanges([]);
-                persistCartState(normalizedServerItems, []);
-            } else {
+            const data = await response.json();
+            logger.debug(data, 'Cart sync response');
+
+            if (data.items) {
+                const validItems = data.items
+                    .map(validateCartItem)
+                    .filter((item): item is CartItem => item !== null);
+                logger.debug(validItems, 'Valid items from sync');
+                setItemsWithPreservation(validItems);
             }
-        } catch (err: any) {
-            console.error('Failed to sync cart:', err);
-            setError(err instanceof Error ? err.message : 'Failed to sync cart');
-            toast.error(err instanceof Error ? err.message : 'Failed to sync cart');
-            const isClientError = typeof err === 'object' && err !== null && 'status' in err && (err.status === 400 || err.status === 404);
-            if (!isClientError) {
-                setPendingChanges(prev => [...prev, ...itemsToSync]);
-            }
-        } finally {
-            setIsLoading(false);
+        } catch (error) {
+            logger.error(error, 'Error syncing cart');
+            setError(error instanceof Error ? error : new Error('Failed to sync cart'));
+            throw error;
         }
-    }, [session, persistCartState, rateLimitCooldown, items, guestId]);
+    }, [setItemsWithPreservation]);
 
-    // Save cart to localStorage whenever it changes
-    useEffect(() => {
-        if (!isClient) return;
+    // Persist cart state to localStorage
+    const persistCartState = useCallback((itemsToPersist: CartItem[], pendingChangesToPersist: CartChange[]) => {
+        if (!isClient || !localStorageAvailable) return;
+        
         try {
-            persistCartState(items, pendingChanges);
-            // Calculate total and item count
-            const safeItems = items ?? [];
-            const newTotal = safeItems.reduce((sum, item) => {
-                const itemPrice = typeof item.price === 'string' ? parseFloat(item.price) : item.price;
-                const itemTotal = itemPrice * (item.quantity || 0);
-                return sum + (isNaN(itemTotal) ? 0 : itemTotal);
-            }, 0);
-            const newItemCount = safeItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
-            setTotal(newTotal);
-            setItemCount(newItemCount);
-        } catch (err) {
-            const { message } = handleApiError(err);
-            setError(message);
+            const cartState = {
+                items: itemsToPersist,
+                pendingChanges: pendingChangesToPersist,
+                lastSynced: Date.now()
+            };
+            localStorage.setItem('cart', JSON.stringify(cartState));
+        } catch (error) {
+            console.error('Error persisting cart state:', error);
         }
-    }, [items, isClient, pendingChanges, persistCartState]);
+    }, [isClient, localStorageAvailable]);
+
+    // Load cart on mount
+    useEffect(() => {
+        const loadCart = async () => {
+            try {
+                setIsLoading(true);
+                setError(null);
+
+                // Try to load from localStorage first
+                const savedState = loadCartState();
+                if (savedState) {
+                    setItems(savedState.items);
+                    setLastSynced(savedState.lastSynced);
+                    if (savedState.pendingChanges) {
+                        setPendingChanges(savedState.pendingChanges);
+                    }
+                }
+
+                // If user is logged in, sync with server
+                if (session?.user) {
+                    await syncCart(items);
+                }
+            } catch (error) {
+                const { recovered, result } = await handleCartError(error, {
+                    operation: 'loadCart',
+                    items: items
+                });
+
+                if (recovered && result) {
+                    if (Array.isArray(result)) {
+                        setItems(result);
+                    } else {
+                        setItems(result.items);
+                        setLastSynced(result.lastSynced);
+                        if (result.pendingChanges) {
+                            setPendingChanges(result.pendingChanges);
+                        }
+                    }
+                } else {
+                    setError(error instanceof Error ? error : new Error('Failed to load cart'));
+                    toast({
+                        title: 'Error',
+                        description: 'Failed to load your cart. Please try again.',
+                        variant: 'destructive'
+                    });
+                }
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        loadCart();
+    }, [session?.user]);
+
+    // Calculate cart totals
+    useEffect(() => {
+        const safeItems = items ?? [];
+        logger.debug(safeItems, 'Calculating cart totals');
+        
+        const newTotal = safeItems.reduce((sum, item: CartItem) => {
+            try {
+                const itemPrice = item.price;
+                const itemQuantity = item.quantity;
+                
+                if (!itemPrice || !itemQuantity || isNaN(itemPrice) || isNaN(itemQuantity) || itemQuantity <= 0 || itemPrice <= 0) {
+                    logger.warn(item, 'Invalid cart item (invalid price or quantity)');
+                    return sum;
+                }
+                
+                const itemTotal = itemPrice * itemQuantity;
+                logger.debug(itemTotal, 'Item total');
+                return sum + (isNaN(itemTotal) ? 0 : itemTotal);
+            } catch (err) {
+                logger.error(err, 'Error processing cart item');
+                return sum;
+            }
+        }, 0);
+
+        logger.debug(newTotal, 'Final cart total');
+        
+        // Ensure total is a valid positive number
+        const validTotal = isNaN(newTotal) || newTotal < 0 ? 0 : newTotal;
+        setTotal(validTotal);
+    }, [items]);
 
     // Sync cart with server every 10 minutes, and immediately on login/mount
     useEffect(() => {
@@ -378,120 +471,136 @@ export function CartProvider({ children }: CartProviderProps) {
         return undefined;
     }, [isClient, session?.user, items, pendingChanges, syncCart]);
 
-    // Debounce syncCart and only call when items actually change and the update was user-initiated
-    const debouncedSyncCart = useMemo(() => debounce((itemsToSync: CartItem[]) => {
-        if (session?.user && itemsToSync.length === 0) return; // Don't sync empty cart for authenticated users
-        if (userInitiatedRef.current) {
-            syncCart(itemsToSync);
-            lastSyncTimeRef.current = Date.now();
-            userInitiatedRef.current = false;
-        }
-    }, 1000), [syncCart, session]);
+    // Update the findItem function to handle variant types
+    const findItem = (items: CartItem[], productId: string, variantId?: string): CartItem | undefined => {
+        return items.find(item => {
+            if (variantId) {
+                return item.productId === productId && 
+                    'variantId' in item && 
+                    item.variantId === variantId;
+            }
+            return item.productId === productId;
+        });
+    };
 
-    // Debug log at the start of updateQuantity
-    const updateQuantity = useCallback(async (id: string, quantity: number, variantId?: string): Promise<void> => {
-        if (rateLimitCooldown) {
-            setError("You're making changes too quickly. Please wait a moment and try again.");
-            return;
-        }
+    // Update the addItem function to handle variant types
+    const addItem = useCallback(async (input: CartItemInput) => {
         try {
-            userInitiatedRef.current = true;
-            let updatedItems;
-            if (quantity === 0) {
-                updatedItems = items.filter(item => !(item.id === id && (!variantId || item.variantId === variantId)));
-            } else {
-                updatedItems = items.map(item => {
-                    if (item.id === id && (!variantId || item.variantId === variantId)) {
-                        return { ...item, quantity };
-                    }
-                    return item;
+            setError(null);
+            const validatedItem = validateCartItem(input);
+            
+            if (!validatedItem) {
+                throw new CartError(
+                    'Invalid item data',
+                    CartErrorCodes.INVALID_ITEM,
+                    { input }
+                );
+            }
+
+            setItems(prevItems => {
+                const existingItem = findItem(prevItems, validatedItem.productId, 'variantId' in validatedItem ? validatedItem.variantId : undefined);
+
+                if (existingItem) {
+                    return prevItems.map(item =>
+                        item.id === existingItem.id
+                            ? { ...item, quantity: item.quantity + validatedItem.quantity }
+                            : item
+                    );
+                }
+
+                return [...prevItems, validatedItem];
+            });
+
+            setPendingChanges(prev => [...prev, validatedItem]);
+            debouncedSyncCart(items);
+        } catch (error) {
+            const { recovered, result } = await handleCartError(error, {
+                operation: 'addItem',
+                items: items
+            });
+
+            if (!recovered) {
+                setError(error instanceof Error ? error : new Error('Failed to add item'));
+                toast({
+                    title: 'Error',
+                    description: 'Failed to add item to cart. Please try again.',
+                    variant: 'destructive'
                 });
             }
-            setItems(Array.isArray(updatedItems) ? updatedItems : []);
-            persistCartState(Array.isArray(updatedItems) ? updatedItems : [], Array.isArray(pendingChanges) ? pendingChanges : []);
-            debouncedSyncCart(Array.isArray(updatedItems) ? updatedItems : []);
-            if (session?.user) {
-                syncCart(updatedItems);
-            }
-        } catch (err) {
-            const { message } = handleApiError(err);
-            setError(message);
         }
-    }, [items, pendingChanges, session, syncCart, rateLimitCooldown, debouncedSyncCart, persistCartState]);
+    }, [items, debouncedSyncCart]);
 
-    // Debug log at the start of addItem
-    const addItem = useCallback(async (item: CartItemInput, quantity: number = 1): Promise<void> => {
-        if (rateLimitCooldown) {
-            setError("You're making changes too quickly. Please wait a moment and try again.");
-            return;
-        }
+    // Update the removeItem function with proper type handling
+    const removeItem = useCallback(async (itemId: string, variantId?: string) => {
         try {
-            userInitiatedRef.current = true;
-            const safeItems = Array.isArray(items) ? items : [];
-            // Use both id and variantId for uniqueness
-            const existingItemIndex = safeItems.findIndex(
-                i => i.productId === item.productId && i.variantId === item.variantId
-            );
-            const newId = item.variantId ? `${item.productId}-${item.variantId}` : item.productId;
-            const newItem: CartItem = {
-                id: newId,
-                productId: item.productId,
-                variantId: item.variantId,
-                name: item.name,
-                price: item.price,
-                image: item.image,
-                quantity,
-                stock: item.stock
-            };
-            let updatedItems;
-            if (existingItemIndex >= 0) {
-                updatedItems = safeItems.map((i, idx) =>
-                    idx === existingItemIndex
-                        ? { ...i, quantity: i.quantity + quantity }
-                        : i
-                );
-            } else {
-                updatedItems = [...safeItems, newItem];
-            }
-            setItems(updatedItems);
-            persistCartState(updatedItems, pendingChanges);
-            debouncedSyncCart(updatedItems);
-        } catch (err) {
-            const { message } = handleApiError(err);
-            setError(message);
+            logger.debug({ itemId, variantId }, 'Removing item from cart');
+            
+            const updatedItems = items.filter((item: CartItem): boolean => {
+                if (!isBaseCartItem(item) && !isProductCartItem(item)) {
+                    logger.warn(item, 'Invalid cart item found during removal');
+                    return false;
+                }
+                if (variantId && isProductCartItem(item)) {
+                    return !(item.id === itemId && item.variantId === variantId);
+                }
+                return item.id !== itemId;
+            });
+            setItemsWithPreservation(updatedItems);
+            
+            // Sync with server
+            await syncCart(updatedItems);
+        } catch (error) {
+            logger.error(error, 'Error removing item from cart');
+            setError(error instanceof Error ? error : new Error('Failed to remove item from cart'));
+            toast({
+                title: 'Error',
+                description: 'Failed to remove item from cart. Please try again.',
+                variant: 'destructive'
+            });
         }
-    }, [items, pendingChanges, rateLimitCooldown, debouncedSyncCart, persistCartState]);
+    }, [items, setItemsWithPreservation, syncCart]);
 
-    const removeItem = useCallback(async (id: string, variantId?: string): Promise<void> => {
-        if (rateLimitCooldown) {
-            setError("You're making changes too quickly. Please wait a moment and try again.");
-            return;
-        }
+    // Update the updateQuantity function with proper type handling
+    const updateQuantity = useCallback(async (itemId: string, quantity: number, variantId?: string) => {
         try {
-            userInitiatedRef.current = true;
-            const updatedItems = items.filter(
-                item => !(item.id === id && (!variantId || item.variantId === variantId))
-            );
-
-            setItems(Array.isArray(updatedItems) ? updatedItems : []);
-            persistCartState(Array.isArray(updatedItems) ? updatedItems : [], Array.isArray(pendingChanges) ? pendingChanges : []);
-            debouncedSyncCart(Array.isArray(updatedItems) ? updatedItems : []);
-
-            if (session?.user) {
-                syncCart(updatedItems);
+            logger.debug({ itemId, quantity, variantId }, 'Updating item quantity');
+            
+            if (quantity <= 0) {
+                await removeItem(itemId, variantId);
+                return;
             }
-        } catch (err) {
-            const { message } = handleApiError(err);
-            setError(message);
+
+            const updatedItems = items.map((item: CartItem): CartItem => {
+                if (!isBaseCartItem(item) && !isProductCartItem(item)) {
+                    logger.error(item, 'Invalid cart item found during quantity update');
+                    throw new Error('Invalid cart item');
+                }
+                if (variantId && isProductCartItem(item)) {
+                    return (item.id === itemId && item.variantId === variantId) ? { ...item, quantity } : item;
+                }
+                return item.id === itemId ? { ...item, quantity } : item;
+            });
+            setItemsWithPreservation(updatedItems);
+            
+            // Sync with server
+            await syncCart(updatedItems);
+        } catch (error) {
+            logger.error(error, 'Error updating item quantity');
+            setError(error instanceof Error ? error : new Error('Failed to update item quantity'));
+            toast({
+                title: 'Error',
+                description: 'Failed to update item quantity. Please try again.',
+                variant: 'destructive'
+            });
         }
-    }, [items, pendingChanges, rateLimitCooldown, debouncedSyncCart, persistCartState, session?.user, syncCart]);
+    }, [items, setItemsWithPreservation, removeItem, syncCart]);
 
     // --- Wrap cart mutations ---
     const atomicAddItem = useCallback(async (item: CartItemInput, quantity: number = 1) => {
         return new Promise<void>((resolve, reject) => {
             enqueueMutation(async () => {
                 try {
-                    await addItem(item, quantity);
+                    await addItem(item);
                     resolve();
                 } catch (e) {
                     reject(e);
@@ -535,7 +644,7 @@ export function CartProvider({ children }: CartProviderProps) {
     }, [isClient]);
 
     // Replace clearCart with clearCartAndStorage in logout/clear cart flows
-    const clearCart = useCallback(() => {
+    const clearCart = useCallback(async () => {
         userInitiatedRef.current = true;
         clearCartAndStorage();
         if (status === 'authenticated') {
@@ -608,7 +717,7 @@ export function CartProvider({ children }: CartProviderProps) {
     // --- Cart Sharing ---
     const generateShareableCartLink = useCallback(async (): Promise<string | null> => {
         if (!items || items.length === 0) {
-            setError('Cannot share an empty cart.');
+            setError(new Error('Cannot share an empty cart.'));
             return null;
         }
         try {
@@ -622,7 +731,7 @@ export function CartProvider({ children }: CartProviderProps) {
             const data = await res.json();
             return data.shareId ? `${window.location.origin}/cart/shared/${data.shareId}` : null;
         } catch (err) {
-            setError('Failed to generate shareable cart link.');
+            setError(new Error('Failed to generate shareable cart link.'));
             return null;
         }
     }, [items]);
@@ -640,7 +749,7 @@ export function CartProvider({ children }: CartProviderProps) {
             }
             return false;
         } catch (err) {
-            setError('Failed to load shared cart.');
+            setError(new Error('Failed to load shared cart.'));
             return false;
         }
     }, [persistCartState]);
@@ -827,47 +936,12 @@ export function CartProvider({ children }: CartProviderProps) {
         }
     }, [isLoading]);
 
-    // On mount, load or generate guestId for guests
+    // Cleanup on unmount
     useEffect(() => {
-        if (!isClient) return;
-        if (status === 'authenticated') {
-            setGuestId(null);
-            return;
-        }
-        let storedGuestId = null;
-        try {
-            storedGuestId = localStorage.getItem('guestId');
-        } catch {}
-        if (!storedGuestId) {
-            storedGuestId = uuidv4();
-            try {
-                localStorage.setItem('guestId', storedGuestId);
-            } catch {}
-        }
-        setGuestId(storedGuestId);
-    }, [isClient, status]);
-
-    // Add effect to load cart for authenticated users on mount/login
-    useEffect(() => {
-        if (!isClient || status !== 'authenticated' || cartLoaded) return;
-        (async () => {
-            try {
-                const res = await fetch('/api/cart', { credentials: 'include' });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data && Array.isArray(data.items)) {
-                        userInitiatedRef.current = false;
-                        setItems(data.items);
-                        setPendingChanges([]);
-                        persistCartState(data.items, []);
-                    }
-                }
-            } catch (err) {
-            } finally {
-                setCartLoaded(true);
-            }
-        })();
-    }, [isClient, status, cartLoaded, persistCartState]);
+        return () => {
+            cleanupTimeouts();
+        };
+    }, [cleanupTimeouts]);
 
     return (
         <CartContext.Provider value={value}>

@@ -1,4 +1,7 @@
-import type { CartItem } from '@/types/product';
+import type { CartItem, BaseCartItem, ProductCartItem } from '@/types/cart';
+import { isBaseCartItem, isProductCartItem } from '@/types/cart';
+import { validatePrice } from '@/lib/AppUtils';
+import { logger } from '@/lib/logger';
 
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000;
@@ -62,29 +65,110 @@ export function generateCartItemId(): string {
   return Math.random().toString(36).substring(2, 15);
 }
 
-export function validateCartItem(item: any): item is CartItem {
-  const valid = (
-    typeof item === 'object' &&
-    typeof item.productId === 'string' &&
-    !!item.productId &&
-    typeof item.quantity === 'number' &&
-    item.quantity > 0
-    // Add more checks as needed (e.g., name, price, etc.)
-  );
-  if (!valid) {
-    // Log which fields are invalid
-    const reasons = [];
-    if (typeof item !== 'object') reasons.push('item is not an object');
-    if (!item.productId || typeof item.productId !== 'string') reasons.push('missing or invalid productId');
-    if (typeof item.quantity !== 'number' || item.quantity <= 0) reasons.push('missing or invalid quantity');
-    // Optionally check for name, price, etc.
-    if (!item.name || typeof item.name !== 'string') reasons.push('missing or invalid name');
-    if (typeof item.price !== 'number' || isNaN(item.price)) reasons.push('missing or invalid price');
-    if (!item.image || typeof item.image !== 'string') reasons.push('missing or invalid image');
-    console.warn('[Cart] validateCartItem failed:', item, 'Reasons:', reasons);
+export const validateCartItem = (item: unknown): CartItem | null => {
+  try {
+    if (!item || typeof item !== 'object') {
+      logger.warn(item, 'Invalid cart item: not an object');
+      return null;
+    }
+
+    const baseItem = item as BaseCartItem;
+    const productItem = item as ProductCartItem;
+
+    // Check required base properties
+    if (!baseItem.id || typeof baseItem.id !== 'string') {
+      logger.warn(item, 'Invalid cart item: missing or invalid id');
+      return null;
+    }
+    if (!baseItem.productId || typeof baseItem.productId !== 'string') {
+      logger.warn(item, 'Invalid cart item: missing or invalid productId');
+      return null;
+    }
+    if (typeof baseItem.quantity !== 'number' || baseItem.quantity <= 0) {
+      logger.warn(item, 'Invalid cart item: missing or invalid quantity');
+      return null;
+    }
+    if (typeof baseItem.price !== 'number' || baseItem.price < 0) {
+      logger.warn(item, 'Invalid cart item: missing or invalid price');
+      return null;
+    }
+    if (!baseItem.name || typeof baseItem.name !== 'string') {
+      logger.warn(item, 'Invalid cart item: missing or invalid name');
+      return null;
+    }
+    if (!baseItem.image || typeof baseItem.image !== 'string') {
+      logger.warn(item, 'Invalid cart item: missing or invalid image');
+      return null;
+    }
+
+    // Check if it's a product cart item
+    if ('originalPrice' in item && 'product' in item) {
+      if (typeof productItem.originalPrice !== 'number' || productItem.originalPrice < 0) {
+        logger.warn(item, 'Invalid product cart item: missing or invalid originalPrice');
+        return null;
+      }
+      if (productItem.product && typeof productItem.product !== 'object') {
+        logger.warn(item, 'Invalid product cart item: invalid product object');
+        return null;
+      }
+      if (productItem.variant && typeof productItem.variant !== 'object') {
+        logger.warn(item, 'Invalid product cart item: invalid variant object');
+        return null;
+      }
+      return productItem;
+    }
+
+    return baseItem;
+  } catch (error) {
+    logger.error(error, 'Error validating cart item');
+    return null;
   }
-  return valid;
-}
+};
+
+export const validateCartState = (state: unknown): CartState | null => {
+  try {
+    if (!state || typeof state !== 'object') {
+      logger.warn(state, 'Invalid cart state: not an object');
+      return null;
+    }
+
+    const cartState = state as CartState;
+
+    // Validate items array
+    if (!Array.isArray(cartState.items)) {
+      logger.warn(state, 'Invalid cart state: items is not an array');
+      return null;
+    }
+
+    // Validate each item
+    const validItems = cartState.items
+      .map(validateCartItem)
+      .filter((item): item is CartItem => item !== null);
+
+    if (validItems.length !== cartState.items.length) {
+      logger.warn(state, 'Invalid cart state: some items failed validation');
+      return null;
+    }
+
+    // Validate other required properties
+    if (!cartState.lastSynced || typeof cartState.lastSynced !== 'string') {
+      logger.warn(state, 'Invalid cart state: missing or invalid lastSynced');
+      return null;
+    }
+    if (!cartState.version || typeof cartState.version !== 'string') {
+      logger.warn(state, 'Invalid cart state: missing or invalid version');
+      return null;
+    }
+
+    return {
+      ...cartState,
+      items: validItems
+    };
+  } catch (error) {
+    logger.error(error, 'Error validating cart state');
+    return null;
+  }
+};
 
 export function compressCartData(items: CartItem[]): string {
   return JSON.stringify(items);
@@ -160,15 +244,25 @@ export const persistCartState = (items: CartItem[], pendingChanges?: CartItem[])
   if (typeof window === 'undefined') return;
   
   try {
+    // Validate items before persisting
+    const validItems = items
+      .map(validateCartItem)
+      .filter((item): item is CartItem => item !== null);
+
+    const validPendingChanges = pendingChanges
+      ?.map(validateCartItem)
+      .filter((item): item is CartItem => item !== null);
+
     const cartState: CartState = {
-      items,
+      items: validItems,
       lastSynced: new Date().toISOString(),
       version: '1.0',
-      pendingChanges
+      pendingChanges: validPendingChanges
     };
+
     localStorage.setItem('cartState', JSON.stringify(cartState));
   } catch (error) {
-    console.error('Failed to persist cart state:', error);
+    logger.error(error, 'Failed to persist cart state');
   }
 };
 
@@ -176,13 +270,13 @@ export const loadCartState = (): CartState | null => {
   if (typeof window === 'undefined') return null;
   
   try {
-    const savedState = localStorage.getItem('cartState');
-    if (!savedState) return null;
+    const raw = localStorage.getItem('cartState');
+    if (!raw) return null;
     
-    const state = JSON.parse(savedState) as CartState;
-    return state;
+    const parsed = JSON.parse(raw);
+    return validateCartState(parsed);
   } catch (error) {
-    console.error('Failed to load cart state:', error);
+    logger.error(error, 'Error loading cart state');
     return null;
   }
 }; 

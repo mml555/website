@@ -8,9 +8,16 @@ export async function listUserAddresses(userId: string) {
 export async function createUserAddress(userId: string, data: any) {
   const parse = userAddressSchema.safeParse(data)
   if (!parse.success) {
-    throw new Error('Invalid address')
+    throw new Error('Invalid address data')
   }
-  return prisma.userAddress.create({ data: { ...parse.data, userId } })
+
+  const addressData = {
+    ...parse.data,
+    userId,
+    email: parse.data.email || '',
+  }
+
+  return prisma.userAddress.create({ data: addressData })
 }
 
 export async function updateUserAddress(userId: string, data: any) {

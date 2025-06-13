@@ -1,154 +1,142 @@
-import { PrismaAdapter } from "@next-auth/prisma-adapter"
+import { NextAuthOptions } from 'next-auth'
+import { prisma } from './prisma'
+import { rateLimit } from './rate-limit'
+import { logger } from './logger'
+import { monitoring } from './monitoring'
 import CredentialsProvider from "next-auth/providers/credentials"
-import { prisma } from '@/lib/prisma'
-import { RateLimit } from "@/lib/rate-limit"
-import bcrypt, { compare } from "bcryptjs"
-import { AuthOptions } from "next-auth"
-
-// Create a rate limiter with more lenient limits
-const loginLimiter = new RateLimit({
-  interval: 15 * 60, // 15 minutes
-  uniqueTokenPerInterval: 500
-})
-
-// Password validation
-function validatePassword(password: string): boolean {
-  const minLength = 8
-  const hasUpperCase = /[A-Z]/.test(password)
-  const hasLowerCase = /[a-z]/.test(password)
-  const hasNumbers = /\d/.test(password)
-  const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password)
-
-  return (
-    password.length >= minLength &&
-    hasUpperCase &&
-    hasLowerCase &&
-    hasNumbers &&
-    hasSpecialChar
-  )
-}
-
-// Helper function to hash password
-async function hashPassword(password: string): Promise<string> {
-  const salt = await bcrypt.genSalt(12)
-  return bcrypt.hash(password, salt)
-}
-
-// Helper function to verify password
-async function verifyPassword(password: string, hashedPassword: string): Promise<boolean> {
-  return bcrypt.compare(password, hashedPassword)
-}
+import bcrypt from "bcryptjs"
+import { PrismaAdapter } from "@auth/prisma-adapter"
+import GoogleProvider from "next-auth/providers/google"
+import EmailProvider from "next-auth/providers/email"
+import { sendVerificationRequest } from "@/lib/email"
 
 // Validate environment variables
 function validateEnv() {
-  const requiredEnvVars = ['NEXTAUTH_URL', 'NEXTAUTH_SECRET']
-  const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar])
-  
-  if (missingEnvVars.length > 0) {
-    console.warn(`Missing required environment variables: ${missingEnvVars.join(', ')}`)
-    console.warn('Please set these variables in your .env file')
+  const required = ['NEXTAUTH_SECRET', 'NEXTAUTH_URL']
+  const missing = required.filter(key => !process.env[key])
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`)
   }
 }
 
-// Call validation on import
 validateEnv()
 
-export const authOptions: AuthOptions = {
+export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
   providers: [
     CredentialsProvider({
-      name: "credentials",
+      name: 'credentials',
       credentials: {
         email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" },
+        password: { label: "Password", type: "password" }
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
-          throw new Error('Please enter your email and password')
+          throw new Error('Invalid credentials')
         }
 
-        try {
-          // Check rate limit
-          try {
-            await loginLimiter.check(10, credentials.email)
-          } catch {
-            throw new Error('Too many login attempts, please try again later')
+        const user = await prisma.user.findUnique({
+          where: { email: credentials.email },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            password: true,
+            role: true
           }
+        })
 
-          const user = await prisma.user.findUnique({
-            where: {
-              email: credentials.email
-            }
-          })
-
-          if (!user) {
-            throw new Error('No user found with this email')
-          }
-
-          if (!user.password) {
-            throw new Error('User does not have a password set')
-          }
-          const isPasswordValid = await compare(
-            credentials.password,
-            user.password
-          )
-
-          if (!isPasswordValid) {
-            throw new Error('Invalid password')
-          }
-
-          return {
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            role: user.role
-          }
-        } catch (error) {
-          console.error('Login error:', error)
-          throw error
+        if (!user || !user.password) {
+          throw new Error('Invalid credentials')
         }
+
+        const isValid = await bcrypt.compare(credentials.password, user.password)
+        if (!isValid) {
+          throw new Error('Invalid credentials')
+        }
+
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role
+        }
+      }
+    }),
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    }),
+    EmailProvider({
+      server: {
+        host: process.env.EMAIL_SERVER_HOST,
+        port: process.env.EMAIL_SERVER_PORT,
+        auth: {
+          user: process.env.EMAIL_SERVER_USER,
+          pass: process.env.EMAIL_SERVER_PASSWORD,
+        },
       },
+      from: process.env.EMAIL_FROM,
+      sendVerificationRequest,
     }),
   ],
   pages: {
-    signIn: "/login",
-    error: "/login", // Redirect to login page on error
+    signIn: '/auth/signin',
+    signOut: '/auth/signout',
+    error: '/auth/error',
+    verifyRequest: '/auth/verify-request',
   },
   session: {
-    strategy: "jwt" as const,
-    maxAge: 30 * 24 * 60 * 60, // 30 days
-    updateAge: 24 * 60 * 60, // 24 hours
-  },
-  jwt: {
-    secret: process.env.NEXTAUTH_SECRET || "fallback-secret-key-for-development",
+    strategy: 'jwt',
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
-    async jwt(args: { token: any; user: any }) {
-      const { token, user } = args;
+    async jwt({ token, user }) {
       if (user) {
-        return {
-          ...token,
-          id: user.id,
-          role: user.role,
-        }
+        token.id = user.id;
+        token.role = user.role;
       }
-      return token
+      return token;
     },
-    async session({ session, token }: { session: any; token: any }) {
-      if (token) {
-        return {
-          ...session,
-          user: {
-            ...session.user,
-            id: token.id as string,
-            role: token.role as "USER" | "ADMIN",
-          },
-        }
+    async session({ session, token }) {
+      if (session.user) {
+        session.user.id = token.id as string;
+        session.user.role = token.role as string;
       }
-      return session
+      return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET || "fallback-secret-key-for-development",
-  debug: false,
+  events: {
+    async signIn({ user }) {
+      try {
+        await monitoring.measureAsync('auth_sign_in', async () => {
+          await rateLimit.check(5, user.id) // 5 attempts per minute
+        }, { userId: user.id })
+      } catch (error) {
+        logger.error('Rate limit exceeded for sign in', { userId: user.id, error })
+        throw error
+      }
+    }
+  },
+  secret: process.env.NEXTAUTH_SECRET,
+  debug: process.env.NODE_ENV === 'development',
+  logger: {
+    error(code, metadata) {
+      const errorMessage = metadata instanceof Error 
+        ? metadata.message 
+        : typeof metadata === 'object' 
+          ? JSON.stringify(metadata, null, 2)
+          : String(metadata);
+      logger.error({ code, error: errorMessage }, 'NextAuth error');
+    },
+    warn(code) {
+      logger.warn({ code }, 'NextAuth warning');
+    },
+    debug(code, metadata) {
+      const debugMessage = typeof metadata === 'object'
+        ? JSON.stringify(metadata, null, 2)
+        : String(metadata);
+      logger.debug({ code, details: debugMessage }, 'NextAuth debug');
+    },
+  }
 } 

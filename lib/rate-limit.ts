@@ -1,34 +1,64 @@
 import { LRUCache } from "lru-cache"
+import { logger } from './logger'
+import { monitoring } from './monitoring'
 
-export class RateLimit {
-  private cache: LRUCache<string, number[]>
-  private interval: number
+interface RateLimitConfig {
+  interval: number;
+  uniqueTokenPerInterval: number;
+}
 
-  constructor(options: { interval: number; uniqueTokenPerInterval: number }) {
-    this.interval = options.interval
+interface TokenCount {
+  count: number;
+  resetTime: number;
+}
+
+export class RateLimiter {
+  private cache: LRUCache<string, TokenCount>;
+  private interval: number;
+
+  constructor(config: RateLimitConfig) {
+    this.interval = config.interval;
     this.cache = new LRUCache({
-      max: options.uniqueTokenPerInterval,
-      ttl: options.interval
-    })
+      max: config.uniqueTokenPerInterval,
+      ttl: config.interval
+    });
   }
 
   async check(limit: number, token: string): Promise<void> {
-    const now = Date.now()
-    const tokenCount = this.cache.get(token) || []
-    const windowStart = now - this.interval
+    return monitoring.measureAsync('rate_limit_check', async () => {
+      const now = Date.now();
+      const tokenCount = this.cache.get(token) || { count: 0, resetTime: now + this.interval };
 
-    // Remove old timestamps
-    const validTokens = tokenCount.filter(timestamp => timestamp > windowStart)
-    
-    if (validTokens.length >= limit) {
-      throw new Error('Rate limit exceeded')
-    }
+      // Reset if interval has passed
+      if (now > tokenCount.resetTime) {
+        tokenCount.count = 0;
+        tokenCount.resetTime = now + this.interval;
+      }
 
-    validTokens.push(now)
-    this.cache.set(token, validTokens)
+      // Increment count
+      tokenCount.count += 1;
+
+      // Store the updated count
+      this.cache.set(token, tokenCount);
+
+      // Check if limit is exceeded
+      if (tokenCount.count > limit) {
+        logger.warn('Rate limit exceeded', { token, limit: limit.toString(), count: tokenCount.count.toString() });
+        throw new Error('Rate limit exceeded');
+      }
+
+      logger.debug('Rate limit check passed', { token, limit: limit.toString(), count: tokenCount.count.toString() });
+    }, { token, limit: limit.toString() });
+  }
+
+  async reset(token: string): Promise<void> {
+    this.cache.delete(token);
+    logger.debug('Rate limit reset', { token });
   }
 }
 
-export const rateLimit = (options: { interval: number; uniqueTokenPerInterval: number }) => {
-  return new RateLimit(options)
-} 
+// Create a singleton instance with default configuration
+export const rateLimit = new RateLimiter({
+  interval: 60 * 1000, // 1 minute
+  uniqueTokenPerInterval: 500
+}); 

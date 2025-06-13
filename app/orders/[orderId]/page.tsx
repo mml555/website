@@ -55,6 +55,7 @@ async function getOrder(orderId: string): Promise<Order | null> {
       `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'}/api/orders/${orderId}`,
       {
         cache: 'no-store',
+        next: { revalidate: 0 },
         headers: {
           'Content-Type': 'application/json',
           'Cookie': cookieHeader,
@@ -75,6 +76,13 @@ export default async function OrderDetailsPage({ params }: { params: Promise<{ o
   if (!order) {
     notFound();
   }
+
+  console.log('Order status:', {
+    raw: order.status,
+    upper: order.status.toUpperCase(),
+    type: typeof order.status,
+    isPaid: ['PAID', 'SHIPPED', 'DELIVERED'].includes(order.status.toUpperCase())
+  });
 
   return (
     <div className="px-4 sm:px-6 lg:px-8">
@@ -98,13 +106,13 @@ export default async function OrderDetailsPage({ params }: { params: Promise<{ o
           <div className="space-y-4">
             <div>
               <span className={`px-3 py-1 rounded-full text-sm font-medium mt-2 inline-block ${
-                order.status === 'DELIVERED'
+                String(order.status).toUpperCase() === 'DELIVERED'
                   ? 'bg-green-100 text-green-800'
-                  : order.status === 'CANCELLED'
+                  : String(order.status).toUpperCase() === 'CANCELLED'
                   ? 'bg-red-100 text-red-800'
                   : 'bg-yellow-100 text-yellow-800'
               }`}>
-                {order.status}
+                {String(order.status).toUpperCase()}
               </span>
             </div>
             <div>
@@ -114,7 +122,7 @@ export default async function OrderDetailsPage({ params }: { params: Promise<{ o
             </div>
             <div>
               <p className="text-sm font-medium text-gray-500">Payment Status</p>
-              <p className="mt-1 text-sm text-gray-900">{['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(order.status) ? 'Paid' : 'Pending'}</p>
+              <p className="mt-1 text-sm text-gray-900">{['PAID', 'SHIPPED', 'DELIVERED'].includes(String(order.status).toUpperCase()) ? 'Paid' : 'Pending'}</p>
             </div>
           </div>
         </div>

@@ -45,7 +45,7 @@ describe('Product Component', () => {
     description: 'A test product',
     price: 100,
     stock: 10,
-    images: ['/test.jpg'],
+    images: ['https://picsum.photos/200'],
     categoryId: 'cat1',
     category: { id: 'cat1', name: 'Test Category' },
     weight: 1,

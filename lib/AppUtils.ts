@@ -125,4 +125,13 @@ export function convertDecimalsToNumbers<T>(obj: T): T {
     return result;
   }
   return obj;
+}
+
+export function validatePrice(price: any): number {
+  const num = Number(price)
+  if (isNaN(num) || num < 0) {
+    console.warn('Invalid price value:', price)
+    return 0
+  }
+  return num
 } 

@@ -1,178 +1,240 @@
-import { NextResponse } from "next/server"
-import Stripe from "stripe"
-import { prisma } from "@/lib/prisma"
-import { logError } from '@/lib/errors'
-import redis from '@/lib/redis'
-import { OrderStatus } from '@prisma/client'
+import { NextRequest, NextResponse } from 'next/server';
+import { getStripeInstance } from '@/lib/stripe-server';
+import { prisma } from '@/lib/prisma';
+import { logger } from '@/lib/logger';
+import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2023-10-16' });
+// Initialize Stripe
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2023-10-16',
+  typescript: true,
+});
 
-export async function POST(request: Request) {
-  const body = await request.text();
-  const signature = request.headers.get('stripe-signature');
+async function findOrderWithRetry(paymentIntentId: string, maxRetries = 3): Promise<any> {
+  for (let i = 0; i < maxRetries; i++) {
+    const order = await prisma.order.findFirst({
+      where: { paymentIntentId },
+      include: {
+        items: {
+          include: {
+            product: true,
+            variant: true
+          }
+        },
+        shippingAddress: true,
+        billingAddress: true
+      }
+    });
 
-  if (!signature || !process.env.STRIPE_WEBHOOK_SECRET) {
-    return NextResponse.json({ error: 'Missing stripe signature or webhook secret' }, { status: 400 });
+    if (order) {
+      return order;
+    }
+
+    // Wait before retrying (exponential backoff)
+    await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
   }
 
+  return null;
+}
+
+async function isWebhookProcessed(eventId: string): Promise<boolean> {
+  const processed = await prisma.webhookEvent.findUnique({
+    where: { id: eventId }
+  });
+  return !!processed;
+}
+
+async function markWebhookAsProcessed(eventId: string): Promise<void> {
+  await prisma.webhookEvent.create({
+    data: { id: eventId }
+  });
+}
+
+export async function POST(req: NextRequest) {
   try {
+    const body = await req.text();
+    const signature = req.headers.get('stripe-signature');
+
+    if (!signature || !process.env.STRIPE_WEBHOOK_SECRET) {
+      return NextResponse.json(
+        { error: 'Missing stripe signature or webhook secret' },
+        { status: 400 }
+      );
+    }
+
     const event = stripe.webhooks.constructEvent(
       body,
       signature,
       process.env.STRIPE_WEBHOOK_SECRET
     );
 
-    console.log('[WEBHOOK] Received event:', event.type);
+    // Log the event type for debugging
+    logger.info(`[WEBHOOK] Event type received (pre-switch): ${event.type}`);
 
-    if (event.type === 'charge.succeeded') {
-      const charge = event.data.object as Stripe.Charge;
-      const paymentIntentId = typeof charge.payment_intent === 'string' ? charge.payment_intent : undefined;
-      console.log('[WEBHOOK] charge.succeeded for paymentIntent:', paymentIntentId);
-
-      if (!paymentIntentId) {
-        console.error('[WEBHOOK] No payment intent ID found in charge');
-        return NextResponse.json({ error: 'No payment intent ID found' }, { status: 400 });
-      }
-
-      // Find the order by stripeSessionId
-      const order = await prisma.order.findFirst({
-        where: { stripeSessionId: paymentIntentId },
-        include: {
-          billingAddress: true
-        }
-      });
-
-      if (!order) {
-        console.log('[WEBHOOK] No order found for stripeSessionId:', paymentIntentId);
-        return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 });
-      }
-
-      // Update the order status and billing address
-      const updatedOrder = await prisma.order.update({
-        where: { id: order.id },
-        data: {
-          status: OrderStatus.PAID,
-          customerEmail: charge.billing_details.email || undefined,
-          updatedAt: new Date(),
-          billingAddress: {
-            upsert: {
-              create: {
-                name: charge.billing_details.name || '',
-                email: charge.billing_details.email || '',
-                phone: charge.billing_details.phone || '',
-                street: charge.billing_details.address?.line1 || '',
-                city: charge.billing_details.address?.city || '',
-                state: charge.billing_details.address?.state || '',
-                postalCode: charge.billing_details.address?.postal_code || '',
-                country: charge.billing_details.address?.country || 'US'
-              },
-              update: {
-                name: charge.billing_details.name || '',
-                email: charge.billing_details.email || '',
-                phone: charge.billing_details.phone || '',
-                street: charge.billing_details.address?.line1 || '',
-                city: charge.billing_details.address?.city || '',
-                state: charge.billing_details.address?.state || '',
-                postalCode: charge.billing_details.address?.postal_code || '',
-                country: charge.billing_details.address?.country || 'US'
-              }
-            }
-          }
-        },
-        include: {
-          billingAddress: true
-        }
-      });
-
-      console.log('[WEBHOOK] Order updated successfully:', {
-        orderId: updatedOrder.id,
-        status: updatedOrder.status,
-        paymentIntentId,
-        hasBillingAddress: !!updatedOrder.billingAddress
-      });
-
-      return NextResponse.json({ 
-        success: true,
-        orderId: updatedOrder.id,
-        status: updatedOrder.status
-      });
+    // Check if webhook was already processed
+    const processed = await isWebhookProcessed(event.id);
+    if (processed) {
+      logger.info(`[WEBHOOK] Event already processed: ${event.id}`);
+      return NextResponse.json({ received: true });
     }
 
-    if (event.type === 'payment_intent.succeeded') {
-      const paymentIntent = event.data.object as Stripe.PaymentIntent;
-      console.log('[WEBHOOK][DEBUG] Processing payment_intent.succeeded:', paymentIntent.id);
-
-      try {
-        // Try to find the order using multiple methods
-        let order = null;
+    switch (event.type) {
+      case 'payment_intent.created': {
+        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        logger.info(`[WEBHOOK] Processing payment_intent.created: ${paymentIntent.id}`);
         
-        // First try by stripeSessionId
-        order = await prisma.order.findFirst({
-          where: { stripeSessionId: paymentIntent.id }
-        });
-        
-        // If not found, try by orderNumber from metadata
-        if (!order && paymentIntent.metadata?.orderNumber) {
-          order = await prisma.order.findFirst({
-            where: { orderNumber: paymentIntent.metadata.orderNumber }
-          });
-        }
-
-        // If still not found, try by orderId from metadata
-        if (!order && paymentIntent.metadata?.orderId) {
-          order = await prisma.order.findFirst({
-            where: { id: paymentIntent.metadata.orderId }
-          });
-        }
+        // Find order with retry
+        const order = await findOrderWithRetry(paymentIntent.id);
 
         if (!order) {
-          console.log('[WEBHOOK] No order found for payment intent:', {
-            paymentIntentId: paymentIntent.id,
-            metadata: paymentIntent.metadata
-          });
-          return NextResponse.json({ 
-            error: 'Order not found',
-            details: 'Unable to match payment with an existing order'
-          }, { status: 404 });
+          logger.error(`Order not found for payment intent after retries: ${paymentIntent.id}`);
+          return NextResponse.json(
+            { error: 'Order not found after retries' },
+            { status: 404 }
+          );
         }
 
-        // Update the order status
-        const updatedOrder = await prisma.order.update({
+        // Update order with payment intent ID if not already set
+        if (!order.paymentIntentId) {
+          await prisma.order.update({
+            where: { id: order.id },
+            data: { 
+              paymentIntentId: paymentIntent.id,
+              updatedAt: new Date()
+            }
+          });
+          logger.info(`Order updated with payment intent ID: ${order.id}`);
+        }
+
+        break;
+      }
+
+      case 'payment_intent.succeeded': {
+        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        logger.info(`[WEBHOOK] Processing payment_intent.succeeded: ${paymentIntent.id}`);
+        
+        // Find order with retry
+        const order = await findOrderWithRetry(paymentIntent.id);
+
+        if (!order) {
+          logger.error(`Order not found for payment intent after retries: ${paymentIntent.id}`);
+          return NextResponse.json(
+            { error: 'Order not found after retries' },
+            { status: 404 }
+          );
+        }
+
+        // Update order status to PROCESSING
+        await prisma.order.update({
           where: { id: order.id },
-          data: {
-            status: OrderStatus.PAID,
-            customerEmail: paymentIntent.receipt_email || undefined,
-            stripeSessionId: paymentIntent.id,
+          data: { 
+            status: 'PROCESSING',
+            paymentIntentId: paymentIntent.id,
             updatedAt: new Date()
           }
         });
 
-        console.log('[WEBHOOK] Order updated successfully:', {
-          orderId: updatedOrder.id,
-          status: updatedOrder.status,
+        logger.info(`Order status updated to PROCESSING: ${order.id}`);
+
+        // Clear cart for authenticated users
+        if (order.userId) {
+          await prisma.cartItem.deleteMany({
+            where: {
+              cart: {
+                userId: order.userId
+              }
+            }
+          });
+        }
+
+        break;
+      }
+
+      case 'payment_intent.payment_failed': {
+        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        logger.info(`[WEBHOOK] Processing payment_intent.payment_failed: ${paymentIntent.id}`);
+        
+        // Find order with retry
+        const order = await findOrderWithRetry(paymentIntent.id);
+
+        if (!order) {
+          logger.error('Order not found for failed payment intent after retries', {
+            paymentIntentId: paymentIntent.id
+          });
+          return NextResponse.json(
+            { error: 'Order not found after retries' },
+            { status: 404 }
+          );
+        }
+
+        // Update order status to CANCELLED
+        await prisma.order.update({
+          where: { id: order.id },
+          data: { 
+            status: 'CANCELLED',
+            updatedAt: new Date()
+          }
+        });
+
+        logger.info('Order status updated to CANCELLED', {
+          orderId: order.id,
           paymentIntentId: paymentIntent.id
         });
 
-        return NextResponse.json({ 
-          success: true,
-          orderId: updatedOrder.id,
-          status: updatedOrder.status
-        });
-      } catch (error) {
-        console.error('[WEBHOOK] Error processing payment_intent.succeeded:', error);
-        return NextResponse.json({ 
-          error: 'Failed to process payment intent',
-          details: error instanceof Error ? error.message : 'Unknown error'
-        }, { status: 500 });
+        break;
       }
+
+      case 'charge.succeeded': {
+        const charge = event.data.object as Stripe.Charge;
+        logger.info(`[WEBHOOK] Processing charge.succeeded: ${charge.id}`);
+        
+        if (typeof charge.payment_intent !== 'string') {
+          logger.error(`Invalid payment intent ID in charge: ${charge.id}`);
+          return NextResponse.json(
+            { error: 'Invalid charge data' },
+            { status: 400 }
+          );
+        }
+        
+        // Find order with retry
+        const order = await findOrderWithRetry(charge.payment_intent);
+
+        if (!order) {
+          logger.error(`Order not found for charge after retries: ${charge.payment_intent}`);
+          return NextResponse.json(
+            { error: 'Order not found after retries' },
+            { status: 404 }
+          );
+        }
+
+        // Update order status to PAID
+        await prisma.order.update({
+          where: { id: order.id },
+          data: { 
+            status: 'PAID',
+            paymentIntentId: charge.payment_intent,
+            updatedAt: new Date()
+          }
+        });
+
+        logger.info(`Order status updated to PAID: ${order.id}`);
+
+        break;
+      }
+
+      default:
+        logger.info(`[WEBHOOK] Unhandled event type: ${event.type}`);
     }
 
+    // Mark webhook as processed
+    await markWebhookAsProcessed(event.id);
+    
     return NextResponse.json({ received: true });
-  } catch (err) {
-    console.error('[WEBHOOK] Error:', err);
+  } catch (error) {
+    logger.error(`Error processing webhook: ${error instanceof Error ? error.message : 'Unknown error'}`);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Webhook error' },
-      { status: 400 }
+      { error: 'Webhook processing failed' },
+      { status: 500 }
     );
   }
 } 

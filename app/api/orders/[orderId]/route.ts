@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { prisma } from "@/lib/prisma"
 import { z } from 'zod'
-import { OrderStatus } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 
 // Define the schema for order items
 const orderItemSchema = z.object({
@@ -45,6 +45,8 @@ const orderSchema = z.object({
   shippingAddress: addressSchema.optional(),
   billingAddress: addressSchema.optional(),
   orderNumber: z.string().optional(),
+  stripeSessionId: z.string().optional(),
+  customerEmail: z.string().email().optional(),
 })
 
 // Helper function to convert price to number
@@ -121,7 +123,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
     const processedOrder = {
       ...order,
       total: convertPriceToNumber(order.total) || 0,
-      status: order.status || 'PENDING',
+      status: String(order.status),
       createdAt: order.createdAt ? order.createdAt.toISOString() : new Date().toISOString(),
       user: order.user ? {
         name: order.user.name || '',
@@ -138,16 +140,28 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
       })),
       shippingAddress: order.shippingAddress
         ? {
-            ...order.shippingAddress,
+            id: order.shippingAddress.id,
+            name: order.shippingAddress.name,
+            email: order.shippingAddress.email || order.customerEmail || order.user?.email || '',
+            phone: order.shippingAddress.phone || '',
             street: order.shippingAddress.street,
-            postalCode: order.shippingAddress.postalCode
+            city: order.shippingAddress.city,
+            state: order.shippingAddress.state,
+            postalCode: order.shippingAddress.postalCode,
+            country: order.shippingAddress.country,
           }
         : undefined,
       billingAddress: order.billingAddress
         ? {
-            ...order.billingAddress,
+            id: order.billingAddress.id,
+            name: order.billingAddress.name,
+            email: order.billingAddress.email || order.shippingAddress?.email || order.customerEmail || order.user?.email || '',
+            phone: order.billingAddress.phone || '',
             street: order.billingAddress.street,
-            postalCode: order.billingAddress.postalCode
+            city: order.billingAddress.city,
+            state: order.billingAddress.state,
+            postalCode: order.billingAddress.postalCode,
+            country: order.billingAddress.country,
           }
         : undefined,
       orderNumber: order.orderNumber || '',
@@ -174,6 +188,13 @@ export async function GET(request: NextRequest, context: { params: Promise<{ ord
         { status: 422 }
       )
     }
+
+    console.log('[OrderAPI] Sending order response:', {
+      orderId,
+      status: validatedOrder.data.status,
+      type: typeof validatedOrder.data.status,
+      raw: order.status
+    });
 
     return NextResponse.json(validatedOrder.data)
   } catch (error) {
@@ -255,7 +276,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ o
         id: orderId,
       },
       data: {
-        status: OrderStatus[status as keyof typeof OrderStatus],
+        status: status as any,
       },
       include: {
         items: {
@@ -286,7 +307,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ o
     const processedOrder = {
       ...order,
       total: convertPriceToNumber(order.total) || 0,
-      status: order.status || 'PENDING',
+      status: String(order.status),
       createdAt: order.createdAt ? order.createdAt.toISOString() : new Date().toISOString(),
       user: order.user ? {
         name: order.user.name || '',
@@ -303,16 +324,28 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ o
       })),
       shippingAddress: order.shippingAddress
         ? {
-            ...order.shippingAddress,
+            id: order.shippingAddress.id,
+            name: order.shippingAddress.name,
+            email: order.shippingAddress.email || order.customerEmail || order.user?.email || '',
+            phone: order.shippingAddress.phone || '',
             street: order.shippingAddress.street,
-            postalCode: order.shippingAddress.postalCode
+            city: order.shippingAddress.city,
+            state: order.shippingAddress.state,
+            postalCode: order.shippingAddress.postalCode,
+            country: order.shippingAddress.country,
           }
         : undefined,
       billingAddress: order.billingAddress
         ? {
-            ...order.billingAddress,
+            id: order.billingAddress.id,
+            name: order.billingAddress.name,
+            email: order.billingAddress.email || order.shippingAddress?.email || order.customerEmail || order.user?.email || '',
+            phone: order.billingAddress.phone || '',
             street: order.billingAddress.street,
-            postalCode: order.billingAddress.postalCode
+            city: order.billingAddress.city,
+            state: order.billingAddress.state,
+            postalCode: order.billingAddress.postalCode,
+            country: order.billingAddress.country,
           }
         : undefined,
       orderNumber: order.orderNumber || '',

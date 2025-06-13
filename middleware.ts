@@ -22,7 +22,8 @@ export async function middleware(request: NextRequest) {
     const token = await getToken({ req: request })
     
     if (!token) {
-      return NextResponse.redirect(new URL('/login?callbackUrl=/dashboard', request.url))
+      const callbackUrl = encodeURIComponent(request.nextUrl.pathname)
+      return NextResponse.redirect(new URL(`/login?callbackUrl=${callbackUrl}`, request.url))
     }
 
     // Check for admin role
@@ -35,10 +36,25 @@ export async function middleware(request: NextRequest) {
   if (request.nextUrl.pathname.startsWith('/api/dashboard')) {
     const token = await getToken({ req: request })
     
-    if (!token || token.role !== 'ADMIN') {
+    if (!token) {
       return NextResponse.json(
-        { error: 'Unauthorized' },
+        { 
+          error: 'Authentication required',
+          code: 'AUTH_REQUIRED',
+          message: 'Please sign in to access this resource'
+        },
         { status: 401 }
+      )
+    }
+    
+    if (token.role !== 'ADMIN') {
+      return NextResponse.json(
+        { 
+          error: 'Admin access required',
+          code: 'ADMIN_REQUIRED',
+          message: 'You do not have permission to access this resource'
+        },
+        { status: 403 }
       )
     }
   }

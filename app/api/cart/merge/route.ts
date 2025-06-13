@@ -3,7 +3,9 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { Redis } from '@upstash/redis';
-import { getJsonFromRedis } from '@/lib/redis';
+import { getJsonFromRedis, withRedis } from '@/lib/redis';
+import { logger } from '@/lib/logger';
+import { validatePrice } from '@/lib/AppUtils';
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL || '',
@@ -40,57 +42,127 @@ export async function POST(request: Request) {
     if (!guestId) {
       return NextResponse.json({ success: false, error: 'Missing guestId' }, { status: 400 });
     }
+
     // Load guest cart from Redis
-    const guestCart = (await getJsonFromRedis<{ items: any[] }>(`cart:guest:${guestId}`)) || { items: [] };
-    const guestItems = Array.isArray(guestCart.items) ? guestCart.items : [];
+    let guestItems: any[] = [];
+    try {
+      const guestCart = await withRedis(
+        async (redis) => {
+          const data = await redis.get(`cart:guest:${guestId}`);
+          return data ? JSON.parse(data) : null;
+        },
+        null
+      );
+      guestItems = Array.isArray(guestCart?.items) ? guestCart.items : [];
+    } catch (error) {
+      logger.error(error, 'Failed to load guest cart from Redis');
+      // Continue with empty guest cart
+    }
+
     // Load user cart from DB
     const userCart = await prisma.cart.findUnique({
       where: { userId },
       include: {
-        items: true,
+        items: {
+          include: {
+            product: true,
+            variant: true,
+          },
+        },
       },
     });
-    const userItems = userCart?.items?.map((item: any) => ({
+
+    const userItems = userCart?.items?.map((item) => ({
       id: item.productId,
       quantity: item.quantity,
-      variantId: item.variantId
+      variantId: item.variantId,
+      product: item.product,
+      variant: item.variant,
     })) || [];
-    // Merge
+
+    // Merge carts
     const merged = mergeCarts(guestItems, userItems);
-    // Log merged cart for debugging
-    console.log('[API_CART_MERGE] Merged cart:', merged);
+
     // Save merged cart to DB
-    await prisma.cart.upsert({
+    const updatedCart = await prisma.cart.upsert({
       where: { userId },
       create: {
         userId,
         items: {
-          create: merged.map((item: any) => ({
+          create: merged.map((item) => ({
             productId: item.id,
             quantity: item.quantity,
-            variantId: item.variantId
+            variantId: item.variantId,
           })),
         },
       },
       update: {
         items: {
           deleteMany: {},
-          create: merged.map((item: any) => ({
+          create: merged.map((item) => ({
             productId: item.id,
             quantity: item.quantity,
-            variantId: item.variantId
+            variantId: item.variantId,
           })),
         },
       },
       include: {
-        items: true,
+        items: {
+          include: {
+            product: true,
+            variant: true,
+          },
+        },
       },
     });
+
     // Delete guest cart from Redis
-    await redis.del(`cart:guest:${guestId}`);
-    return NextResponse.json({ success: true, items: merged });
+    try {
+      await withRedis(
+        async (redis) => redis.del(`cart:guest:${guestId}`),
+        undefined
+      );
+    } catch (error) {
+      logger.error(error, 'Failed to delete guest cart from Redis');
+      // Continue even if Redis deletion fails
+    }
+
+    // Transform items for response
+    const transformedItems = updatedCart.items.map((item) => ({
+      id: item.id,
+      productId: item.productId,
+      quantity: item.quantity,
+      variantId: item.variantId,
+      price: validatePrice(Number(item.product.price)),
+      originalPrice: validatePrice(Number(item.product.price)),
+      name: item.product.name,
+      image: item.product.images?.[0] || '',
+      stock: item.product.stock,
+      product: {
+        id: item.product.id,
+        name: item.product.name,
+        price: validatePrice(Number(item.product.price)),
+        images: item.product.images || [],
+        stock: item.product.stock
+      },
+      variant: item.variant ? {
+        id: item.variant.id,
+        name: item.variant.name,
+        price: item.variant.price ? validatePrice(Number(item.variant.price)) : null,
+        stock: item.variant.stock
+      } : null
+    }));
+
+    return NextResponse.json({ success: true, items: transformedItems });
   } catch (error) {
-    console.error('[API_CART_MERGE_ERROR]', error);
-    return NextResponse.json({ success: false, error: 'Failed to merge carts' }, { status: 500 });
+    logger.error(error, 'Failed to merge carts');
+    return NextResponse.json(
+      { 
+        success: false, 
+        error: 'Failed to merge carts',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      }, 
+      { status: 500 }
+    );
   }
 } 

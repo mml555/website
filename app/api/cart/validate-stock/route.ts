@@ -1,44 +1,70 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { validatePrice } from '@/lib/AppUtils';
 
 export async function POST(request: Request) {
-  const body = await request.json();
-  const { productId, variantId } = body;
+  try {
+    const { items } = await request.json();
 
-  if (!productId) {
-    return NextResponse.json({ error: 'Product ID is required' }, { status: 400 });
-  }
+    if (!Array.isArray(items)) {
+      return NextResponse.json(
+        { error: 'Invalid request: items must be an array' },
+        { status: 400 }
+      );
+    }
 
-  // Fetch product with variants
-  const product = await prisma.product.findUnique({
-    where: { id: productId },
-    select: {
-      id: true,
-      name: true,
-      stock: true,
-      variants: {
-        select: {
-          id: true,
-          name: true,
-          stock: true
+    const validationResults = await Promise.all(
+      items.map(async (item) => {
+        const product = await prisma.product.findUnique({
+          where: { id: item.productId },
+          select: {
+            id: true,
+            name: true,
+            price: true,
+            stock: true,
+            variants: {
+              where: { id: item.variantId },
+              select: {
+                id: true,
+                stock: true,
+                price: true,
+              },
+            },
+          },
+        });
+
+        if (!product) {
+          return {
+            productId: item.productId,
+            isValid: false,
+            error: 'Product not found',
+          };
         }
-      }
-    }
-  });
 
-  if (!product) {
-    return NextResponse.json({ error: 'Product not found' }, { status: 404 });
+        const variant = item.variantId
+          ? product.variants.find((v) => v.id === item.variantId)
+          : null;
+
+        const currentStock = variant ? variant.stock : product.stock;
+        const currentPrice = validatePrice(variant ? variant.price : product.price);
+
+        return {
+          productId: item.productId,
+          variantId: item.variantId,
+          isValid: currentStock >= item.quantity,
+          currentStock,
+          currentPrice,
+          requestedQuantity: item.quantity,
+        };
+      })
+    );
+
+    return NextResponse.json({ results: validationResults });
+  } catch (error) {
+    console.error('Error validating stock:', error);
+    return NextResponse.json(
+      { error: 'Failed to validate stock' },
+      { status: 500 }
+    );
   }
-
-  // If variantId is provided, check variant stock
-  if (variantId) {
-    const variant = product.variants.find((v: { id: string }) => v.id === variantId);
-    if (!variant) {
-      return NextResponse.json({ error: 'Variant not found' }, { status: 404 });
-    }
-    return NextResponse.json({ id: variant.id, name: `${product.name} - ${variant.name}`, stock: variant.stock });
-  }
-
-  // Otherwise, return product stock
-  return NextResponse.json({ id: product.id, name: product.name, stock: product.stock });
 } 

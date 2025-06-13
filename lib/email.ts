@@ -1,4 +1,6 @@
 import nodemailer from "nodemailer"
+import { createTransport } from 'nodemailer';
+import { logger } from './logger';
 
 // Create a transporter using SMTP
 const transporter = nodemailer.createTransport({
@@ -77,5 +79,54 @@ export async function sendAdminEmail(subject: string, message: string) {
     return true;
   } catch (error) {
     return false;
+  }
+}
+
+interface SendVerificationRequestParams {
+  identifier: string;
+  url: string;
+  provider: {
+    server: {
+      host: string;
+      port: string;
+      auth: {
+        user: string;
+        pass: string;
+      };
+    };
+    from: string;
+  };
+}
+
+export async function sendVerificationRequest({
+  identifier: email,
+  url,
+  provider: { server, from },
+}: SendVerificationRequestParams) {
+  const { host, port, auth } = server;
+  const transport = createTransport({
+    host,
+    port: Number(port),
+    auth,
+  });
+
+  try {
+    await transport.sendMail({
+      to: email,
+      from,
+      subject: 'Sign in to your account',
+      text: `Click here to sign in: ${url}`,
+      html: `
+        <div>
+          <h1>Sign in to your account</h1>
+          <p>Click the link below to sign in to your account:</p>
+          <a href="${url}">Sign in</a>
+          <p>If you didn't request this email, you can safely ignore it.</p>
+        </div>
+      `,
+    });
+  } catch (error) {
+    logger.error(error, 'Failed to send verification email');
+    throw new Error('Failed to send verification email');
   }
 } 

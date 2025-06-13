@@ -39,7 +39,7 @@ jest.mock('../lib/cart', () => ({
   })
 }));
 
-import PaymentPage from '../app/checkout/CheckoutPaymentPage';
+import PaymentPage from '../app/checkout/payment/page';
 
 function renderWithCartProvider(ui: React.ReactElement) {
   return render(

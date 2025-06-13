@@ -86,7 +86,7 @@ export default function AdminOrdersPage() {
     setStatusLoading(true);
     setStatusError(null);
     const newStatus = e.target.value;
-    const res = await fetch(`/api/admin/orders/${detailOrder.id}`, {
+    const res = await fetch(`/api/orders/${detailOrder.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: newStatus }),
@@ -209,6 +209,23 @@ export default function AdminOrdersPage() {
                     {statusLoading && <span className="text-xs text-gray-500">Saving...</span>}
                   </div>
                   {statusError && <div className="text-red-600 mb-2">{statusError}</div>}
+                  <div className="font-semibold">Payment Status:</div>
+                  <div className="mb-2">
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${
+                      detailOrder.paymentIntentId && ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(detailOrder.status)
+                        ? 'bg-green-100 text-green-800'
+                        : 'bg-yellow-100 text-yellow-800'
+                    }`}>
+                      {detailOrder.paymentIntentId && ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(detailOrder.status)
+                        ? 'Paid'
+                        : 'Pending'}
+                    </span>
+                    {detailOrder.paymentIntentId && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Payment ID: {detailOrder.paymentIntentId}
+                      </p>
+                    )}
+                  </div>
                   <div className="font-semibold">Total:</div>
                   <div className="mb-2">${detailOrder.total.toFixed(2)}</div>
                   <div className="font-semibold">Created:</div>

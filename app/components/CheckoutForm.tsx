@@ -70,47 +70,45 @@ export default function CheckoutForm({ clientSecret, items }: CheckoutFormProps)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!stripe || !elements) return
-
-    setLoading(true)
     setError(null)
+    setLoading(true)
 
     try {
-      // Validate shipping address
-      const requiredFields: (keyof Address)[] = ["name", "email", "address", "city", "state", "zipCode"]
-      const missingShippingFields = requiredFields.filter(field => !shippingAddress[field])
-      if (missingShippingFields.length > 0) {
-        throw new Error(`Please fill in all required shipping address fields: ${missingShippingFields.join(", ")}`)
+      // Validate form data
+      if (!billingAddress.email) {
+        throw new Error("Email is required")
       }
 
-      // Validate billing address if not same as shipping
-      if (!sameAsShipping) {
-        const missingBillingFields = requiredFields.filter(field => !billingAddress[field])
-        if (missingBillingFields.length > 0) {
-          throw new Error(`Please fill in all required billing address fields: ${missingBillingFields.join(", ")}`)
-        }
+      // Set guest session if not logged in
+      if (typeof window !== 'undefined' && !localStorage.getItem('guestSession') && billingAddress.email) {
+        localStorage.setItem('guestSession', billingAddress.email)
+        console.log('Set guest session in checkout form:', billingAddress.email)
       }
 
-      // Validate billing email is a real email and not guestId
-      const emailRegex = /^\S+@\S+\.\S+$/
-      if (!emailRegex.test(billingAddress.email)) {
-        setError('Please enter a valid billing email address')
-        setLoading(false)
-        return
+      // Save form data to session storage
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('shippingAddress', JSON.stringify(shippingAddress))
+        localStorage.setItem('billingAddress', JSON.stringify(billingAddress))
+        localStorage.setItem('shippingRate', '0') // Assuming a default shipping rate
+        localStorage.setItem('taxAmount', '0') // Assuming a default tax amount
+        localStorage.setItem('calculatedTotal', '0') // Assuming a default calculated total
       }
 
-      // Create order first
+      // Create order
       const guestId = typeof window !== 'undefined' ? localStorage.getItem('guestId') : null
       const orderResponse = await fetch("/api/orders", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(guestId ? { "X-Guest-Session": guestId } : {}),
         },
         body: JSON.stringify({
           items: items,
           shippingAddress: shippingAddress,
-          billingAddress: sameAsShipping ? undefined : billingAddress,
-          ...(guestId ? { guestId } : {}),
+          billingAddress: billingAddress,
+          shippingRate: '0', // Assuming a default shipping rate
+          taxAmount: '0', // Assuming a default tax amount
+          total: '0', // Assuming a default calculated total
         }),
       })
 
@@ -120,35 +118,13 @@ export default function CheckoutForm({ clientSecret, items }: CheckoutFormProps)
       }
 
       const orderData = await orderResponse.json()
+      console.log('Order created:', orderData)
 
-      // Then confirm payment
-      const { error: submitError } = await stripe.confirmPayment({
-        elements,
-        confirmParams: {
-          return_url: `${window.location.origin}/order-confirmation`,
-          payment_method_data: {
-            billing_details: {
-              name: billingAddress.name,
-              email: billingAddress.email,
-              phone: billingAddress.phone,
-              address: {
-                line1: billingAddress.address,
-                city: billingAddress.city,
-                state: billingAddress.state,
-                postal_code: billingAddress.zipCode,
-                country: billingAddress.country,
-              },
-            },
-          },
-        },
-      })
-
-      if (submitError) {
-        setError(submitError.message || "An error occurred")
-      }
+      // Redirect to payment page
+      router.push(`/checkout/payment?order_id=${orderData.id}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred")
-    } finally {
+      console.error('Checkout error:', err)
+      setError(err instanceof Error ? err.message : "Failed to process checkout")
       setLoading(false)
     }
   }

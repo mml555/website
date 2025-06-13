@@ -35,7 +35,7 @@ interface BillingAddress {
 interface Order {
   id: string;
   orderNumber: string;
-  status: 'PENDING' | 'PROCESSING' | 'SHIPPED' | 'DELIVERED' | 'CANCELLED';
+  status: 'PENDING' | 'PAID' | 'SHIPPED' | 'DELIVERED' | 'CANCELLED';
   total: number;
   shippingAddress: Address;
   billingAddress: BillingAddress;

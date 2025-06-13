@@ -3,12 +3,16 @@
 import { useCart } from "@/lib/cart"
 import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
-import type { CartItem } from '@/types/product'
+import type { CartItem as CartItemType, BaseCartItem, ProductCartItem } from '@/types/cart'
+import { isProductCartItem, getVariantId } from '@/types/cart'
+import type { CartItem as ProductCartItemType } from '@/types/product'
 import { toast } from "react-hot-toast"
 import LoadingSpinner from "@/components/LoadingSpinner"
 import { TrashIcon } from "@heroicons/react/24/outline"
 import { CartItemsList } from "@/components/Cart"
 import Skeleton from '@/components/ui/Skeleton';
+import { CartError, CartErrorCodes } from '@/lib/cart-error';
+import { memoizeCartCalculation } from '@/lib/cart-performance';
 
 // Main Cart Page UI
 // This is the full cart page for /cart. Do NOT use this as a mini-cart or in a drawer/sidebar.
@@ -16,21 +20,81 @@ import Skeleton from '@/components/ui/Skeleton';
 
 export const dynamic = 'force-dynamic'
 
+// Helper function to validate and format price
+const validatePrice = (price: any): number => {
+  const numPrice = typeof price === 'number' ? price :
+                  typeof price === 'string' ? parseFloat(price) : 0;
+  return isNaN(numPrice) || numPrice < 0 ? 0 : numPrice;
+};
+
+// Helper function to get original price with validation
+const getOriginalPrice = (item: CartItemType | ProductCartItemType): number => {
+  if (isProductCartItem(item)) {
+    return validatePrice(item.originalPrice);
+  }
+  return validatePrice(item.price);
+};
+
+// Memoized price calculation
+const getItemPrice = memoizeCartCalculation(
+  'item-price',
+  () => {
+    return (item: CartItemType | ProductCartItemType) => {
+      if (isProductCartItem(item)) {
+        return validatePrice(item.product?.price || item.price);
+      }
+      const price = validatePrice(item.price);
+      const originalPrice = getOriginalPrice(item);
+      return originalPrice > price ? originalPrice : price;
+    };
+  },
+  5000 // 5 second TTL
+);
+
+// Custom type guard for checking variantId
+const hasVariantId = (item: CartItemType | ProductCartItemType): item is ProductCartItem & { variantId: string } => {
+  const productItem = item as ProductCartItem;
+  return isProductCartItem(item) && typeof productItem.variantId === 'string';
+};
+
+// Inline function to get variantId safely
+const getVariantId = (item: CartItemType | ProductCartItemType): string | undefined => {
+  const productItem = item as ProductCartItem;
+  if (hasVariantId(item)) {
+    return productItem.variantId;
+  }
+  return undefined;
+};
+
 export default function CartPage() {
   const { items, updateQuantity, removeItem, isLoading, error, total: cartTotal, cartExpiryWarning } = useCart()
   const safeItems = useMemo(() => Array.isArray(items) ? items : [], [items]);
   const [isUpdating, setIsUpdating] = useState<{ [key: string]: boolean }>({})
   const router = useRouter()
 
-  const handleQuantityChange = async (item: CartItem, newQuantity: number) => {
+  const handleQuantityChange = async (item: CartItemType | ProductCartItemType, newQuantity: number) => {
     if (newQuantity < 1 || (typeof item.stock === 'number' && newQuantity > item.stock)) return
 
     try {
       setIsUpdating(prev => ({ ...prev, [item.id]: true }))
-      await updateQuantity(item.id, newQuantity)
+      const variantId = getVariantId(item);
+      await updateQuantity(item.id, newQuantity, variantId)
       toast.success('Cart updated')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update cart')
+      if (err instanceof CartError) {
+        switch (err.code) {
+          case CartErrorCodes.INVALID_ITEM:
+            toast.error('Invalid item quantity')
+            break;
+          case CartErrorCodes.SYNC_FAILED:
+            toast.error('Failed to sync with server. Please try again.')
+            break;
+          default:
+            toast.error(err.message || 'Failed to update cart')
+        }
+      } else {
+        toast.error(err instanceof Error ? err.message : 'Failed to update cart')
+      }
     } finally {
       setIsUpdating(prev => ({ ...prev, [item.id]: false }))
     }
@@ -42,19 +106,33 @@ export default function CartPage() {
       await removeItem(itemId)
       toast.success('Item removed from cart')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to remove item')
+      if (err instanceof CartError) {
+        switch (err.code) {
+          case CartErrorCodes.INVALID_ITEM:
+            toast.error('Invalid item')
+            break;
+          case CartErrorCodes.SYNC_FAILED:
+            toast.error('Failed to sync with server. Please try again.')
+            break;
+          default:
+            toast.error(err.message || 'Failed to remove item')
+        }
+      } else {
+        toast.error(err instanceof Error ? err.message : 'Failed to remove item')
+      }
     } finally {
       setIsUpdating(prev => ({ ...prev, [itemId]: false }))
     }
   }
 
-  const getItemPrice = (item: CartItem): number => {
-    const price = Number(item.price)
-    return isNaN(price) || price <= 0 ? 0 : price
-  }
-
   useEffect(() => {
-    console.log('Cart items:', safeItems.map(i => ({id: i.id, name: i.name, variantId: i.variantId})));
+    console.log('Cart items:', safeItems.map(i => ({
+      id: i.id,
+      name: i.name,
+      variantId: i.variantId,
+      price: getItemPrice(i),
+      originalPrice: getOriginalPrice(i)
+    })));
   }, [safeItems]);
 
   if (isLoading) {

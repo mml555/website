@@ -6,7 +6,7 @@ import type { Session } from 'next-auth'
 import AddToCartButton from './AddToCartButton'
 import ProductReviews from './ProductReviews'
 import RelatedProducts from './RelatedProducts'
-import { decimalToNumber, formatPrice, validateProductData } from '@/lib/AppUtils'
+import { decimalToNumber, formatPrice, validateProductData, validatePrice } from '@/lib/AppUtils'
 import { useCart } from '@/lib/cart'
 import ProductImage from '../ProductImage'
 
@@ -42,7 +42,7 @@ export default function ProductDetails({ product, session, onError }: ProductDet
   }
 
   const displayPrice = selectedVariant?.price || product.price
-  const priceNumber = decimalToNumber(displayPrice)
+  const priceNumber = validatePrice(displayPrice)
 
   const validation = validateProductData(product)
   if (!validation.isValid) {

@@ -2,6 +2,7 @@
 import Stripe from 'stripe';
 import { AppError } from './app-errors';
 import { logError } from './errors';
+import { logger } from './logger';
 
 // Helper function to get Stripe configuration status
 export function getStripeConfig() {
@@ -43,22 +44,54 @@ export const getStripeInstance = async (): Promise<Stripe | null> => {
   return stripeInstance;
 };
 
-export async function createPaymentIntent(amount: number, currency: string = 'usd') {
+export async function createPaymentIntent(amount: number, currency: string = 'usd', metadata?: Record<string, any>) {
   const stripe = await getStripeInstance();
   if (!stripe) {
     throw new AppError('Stripe is not configured. Please check your environment variables.', 500);
   }
 
+  if (!amount || amount <= 0) {
+    throw new AppError('Invalid amount for payment intent', 400);
+  }
+
   try {
-    return await stripe.paymentIntents.create({
+    const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount * 100), // Convert to cents
       currency,
       automatic_payment_methods: {
         enabled: true,
       },
+      metadata,
+      capture_method: 'automatic',
+      confirm: false,
+      setup_future_usage: 'off_session',
     });
+
+    return paymentIntent;
   } catch (error: any) {
     logError('Failed to create payment intent', error?.message || 'Unknown error');
+    
+    // Handle specific Stripe errors
+    if (error.type === 'StripeCardError') {
+      throw new AppError(
+        'Your card was declined. Please try a different card.',
+        400,
+        'CARD_DECLINED'
+      );
+    } else if (error.type === 'StripeInvalidRequestError') {
+      throw new AppError(
+        'Invalid payment request. Please check your payment details.',
+        400,
+        'INVALID_REQUEST'
+      );
+    } else if (error.type === 'StripeAPIError') {
+      throw new AppError(
+        'Payment service is temporarily unavailable. Please try again later.',
+        503,
+        'SERVICE_UNAVAILABLE'
+      );
+    }
+
     throw new AppError(
       `Failed to create payment intent: ${error?.message || 'Unknown error'}`,
       500,
@@ -73,10 +106,42 @@ export async function confirmPayment(paymentIntentId: string) {
     throw new AppError('Stripe is not configured. Please check your environment variables.', 500);
   }
 
+  if (!paymentIntentId) {
+    throw new AppError('Payment intent ID is required', 400);
+  }
+
   try {
-    return await stripe.paymentIntents.confirm(paymentIntentId);
+    const paymentIntent = await stripe.paymentIntents.confirm(paymentIntentId);
+    
+    if (paymentIntent.status === 'requires_action') {
+      return {
+        requiresAction: true,
+        paymentIntent,
+      };
+    }
+
+    return {
+      requiresAction: false,
+      paymentIntent,
+    };
   } catch (error: any) {
     logError('Failed to confirm payment', error?.message || 'Unknown error');
+    
+    // Handle specific Stripe errors
+    if (error.type === 'StripeCardError') {
+      throw new AppError(
+        'Your card was declined. Please try a different card.',
+        400,
+        'CARD_DECLINED'
+      );
+    } else if (error.type === 'StripeInvalidRequestError') {
+      throw new AppError(
+        'Invalid payment request. Please check your payment details.',
+        400,
+        'INVALID_REQUEST'
+      );
+    }
+
     throw new AppError(
       `Failed to confirm payment: ${error?.message || 'Unknown error'}`,
       500,
@@ -85,30 +150,29 @@ export async function confirmPayment(paymentIntentId: string) {
   }
 }
 
-export async function handleWebhookEvent(payload: string, signature: string) {
-  const stripe = await getStripeInstance();
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  
-  if (!stripe || !webhookSecret) {
-    throw new AppError(
-      'Stripe webhook is not configured. Please check your STRIPE_WEBHOOK_SECRET environment variable.',
-      500
-    );
-  }
-
+export async function handleWebhookEvent(
+  body: string,
+  signature: string,
+  webhookSecret: string
+): Promise<Stripe.Event | null> {
   try {
-    return await stripe.webhooks.constructEvent(
-      payload,
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+      apiVersion: '2023-10-16',
+      typescript: true,
+    });
+
+    const event = stripe.webhooks.constructEvent(
+      body,
       signature,
       webhookSecret
     );
-  } catch (error: any) {
-    logError('Failed to handle webhook event', error?.message || 'Unknown error');
-    throw new AppError(
-      `Failed to handle webhook event: ${error?.message || 'Unknown error'}`,
-      400,
-      'WEBHOOK_HANDLING_FAILED'
-    );
+
+    return event;
+  } catch (err) {
+    logger.error('Error verifying webhook signature:', {
+      error: err instanceof Error ? err.message : 'Unknown error'
+    });
+    return null;
   }
 }
 

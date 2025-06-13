@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useCart } from '@/lib/cart'
-import { Elements } from '@stripe/react-stripe-js'
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import { loadStripe } from '@stripe/stripe-js'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -11,191 +11,458 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertCircle, Loader2 } from 'lucide-react'
 import CheckoutForm from '@/components/checkout-form'
 import { useSession } from 'next-auth/react'
+import { safeSessionStorage } from '@/lib/session-storage'
+import { Session } from 'next-auth'
+import { Appearance, StripeElementsOptions } from '@stripe/stripe-js'
+import { BillingAddress } from '@/types/address'
+import { useCheckout } from '../../../hooks/useCheckout'
+import { prisma } from '@/lib/prisma'
+import { generateOrderNumber } from '@/lib/order-utils'
+
+// Define shipping rate interface
+interface ShippingRate {
+  id: string;
+  name: string;
+  rate: number;
+  description?: string;
+  estimatedDays: number;
+}
+
+interface CartItem {
+  id: string;
+  productId: string;
+  variantId?: string;
+  name: string;
+  price: number;
+  image: string;
+  quantity: number;
+  stock?: number;
+  stockAtAdd?: number;
+  metadata?: Record<string, any>;
+  weight?: number;
+}
+
+interface CartContextType {
+  items: CartItem[];
+  addItem: (item: CartItemInput, quantity?: number) => Promise<void>;
+  removeItem: (id: string, variantId?: string) => Promise<void>;
+  updateQuantity: (id: string, quantity: number, variantId?: string) => Promise<void>;
+  clearCart: () => void;
+  total: number;
+  itemCount: number;
+  error: string | null;
+  clearError: () => void;
+  isLoading: boolean;
+  retrySync: () => Promise<void>;
+  pendingChanges: CartItem[];
+  cartExpiryWarning: string | null;
+  generateShareableCartLink: () => Promise<string | null>;
+  loadSharedCart: (shareId: string) => Promise<boolean>;
+  savedForLater: CartItem[];
+  moveToSaveForLater: (id: string, variantId?: string) => void;
+  moveToCartFromSaveForLater: (id: string, variantId?: string) => void;
+}
+
+interface CartItemInput {
+  productId: string;
+  variantId?: string;
+  name: string;
+  price: number;
+  image: string;
+  stock?: number;
+}
 
 // Initialize Stripe
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!, {
+  stripeAccount: process.env.NEXT_PUBLIC_STRIPE_ACCOUNT_ID,
+});
 
+const appearance: Appearance = {
+  theme: 'stripe',
+  variables: {
+    colorPrimary: '#0F172A',
+    colorBackground: '#ffffff',
+    colorText: '#0F172A',
+    colorDanger: '#ef4444',
+    fontFamily: 'system-ui, sans-serif',
+    spacingUnit: '4px',
+    borderRadius: '4px',
+  },
+}
+
+// Payment Form Component
+const PaymentForm = () => {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [error, setError] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const { items } = useCart();
+  const { shippingAddress, billingAddress, shippingRate, taxAmount, total } = useCheckout();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) {
+      setError('Payment system not ready');
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      setError(null);
+
+      // Validate required data
+      if (!items?.length) {
+        throw new Error('No items in cart');
+      }
+
+      if (!shippingAddress) {
+        throw new Error('Shipping address is required');
+      }
+
+      if (!billingAddress) {
+        throw new Error('Billing address is required');
+      }
+
+      if (!shippingRate) {
+        throw new Error('Shipping rate is required');
+      }
+
+      if (!total || total <= 0) {
+        throw new Error('Invalid total amount');
+      }
+
+      // Ensure all required fields are present
+      const paymentData = {
+        amount: total,
+        items: items.map(item => ({
+          id: item.id,
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+          variantId: item.variantId || null
+        })),
+        shippingAddress: {
+          name: shippingAddress.name,
+          email: shippingAddress.email,
+          phone: shippingAddress.phone || '',
+          street: shippingAddress.street,
+          city: shippingAddress.city,
+          state: shippingAddress.state,
+          postalCode: shippingAddress.postalCode,
+          country: shippingAddress.country
+        },
+        billingAddress: {
+          name: billingAddress.name,
+          email: billingAddress.email,
+          phone: billingAddress.phone || shippingAddress.phone || '',
+          street: billingAddress.street,
+          city: billingAddress.city,
+          state: billingAddress.state,
+          postalCode: billingAddress.postalCode,
+          country: billingAddress.country
+        },
+        shippingRate: {
+          id: shippingRate.id || 'free',
+          name: shippingRate.name || 'Free Shipping',
+          rate: shippingRate.rate || 0,
+          description: shippingRate.description || 'Standard shipping',
+          estimatedDays: shippingRate.estimatedDays || 7
+        },
+        taxAmount: taxAmount || 0
+      };
+
+      // Log payment data for debugging
+      console.log('Payment data validation:', {
+        hasItems: items.length > 0,
+        itemsCount: items.length,
+        total,
+        hasShippingAddress: !!shippingAddress,
+        hasBillingAddress: !!billingAddress,
+        hasShippingRate: !!shippingRate,
+        shippingRateDetails: shippingRate,
+        taxAmount,
+        fullPaymentData: paymentData
+      });
+
+      // Create payment intent
+      const response = await fetch('/api/create-payment-intent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(paymentData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Payment intent creation failed:', {
+          status: response.status,
+          error: errorData,
+          requestData: paymentData
+        });
+        throw new Error(errorData.error || 'Failed to create payment intent');
+      }
+
+      const data = await response.json();
+
+      // Confirm the payment
+      const { error: confirmError } = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: `${window.location.origin}/order-confirmation/${data.orderId}`,
+          payment_method_data: {
+            billing_details: {
+              name: billingAddress.name,
+              email: billingAddress.email,
+              phone: billingAddress.phone || shippingAddress.phone || '',
+              address: {
+                line1: billingAddress.street,
+                city: billingAddress.city,
+                state: billingAddress.state,
+                postal_code: billingAddress.postalCode,
+                country: billingAddress.country,
+              },
+            },
+          },
+        },
+      });
+
+      if (confirmError) {
+        throw confirmError;
+      }
+    } catch (err) {
+      console.error('Payment error:', err);
+      setError(err instanceof Error ? err.message : 'Payment failed');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <PaymentElement />
+      
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      <Button
+        type="submit"
+        disabled={!stripe || isProcessing}
+        className="w-full"
+      >
+        {isProcessing ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Processing...
+          </>
+        ) : (
+          `Pay $${total.toFixed(2)}`
+        )}
+      </Button>
+    </form>
+  );
+};
+
+// Main Payment Page Component
 export default function PaymentPage() {
   const router = useRouter()
-  const { items, total: cartTotal, isLoading: cartLoading } = useCart()
-  const { status } = useSession()
+  const { items, isLoading: cartLoading, clearCart } = useCart()
+  const { data: session } = useSession()
   const [error, setError] = useState<string | null>(null)
   const [clientSecret, setClientSecret] = useState<string | null>(null)
   const [orderId, setOrderId] = useState<string | null>(null)
-  const [shippingAddress, setShippingAddress] = useState<any>(null)
-  const [billingAddress, setBillingAddress] = useState<any>(null)
-  const [shippingRate, setShippingRate] = useState<any>(null)
+  const [shippingAddress, setShippingAddress] = useState<BillingAddress | null>(null)
+  const [billingAddress, setBillingAddress] = useState<BillingAddress | null>(null)
+  const [shippingRate, setShippingRate] = useState<ShippingRate | null>(null)
+  const [taxAmount, setTaxAmount] = useState<number>(0)
+  const [calculatedTotal, setCalculatedTotal] = useState<number>(0)
   const [paying, setPaying] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [creatingPaymentIntent, setCreatingPaymentIntent] = useState(false)
+  const [paymentIntentCreated, setPaymentIntentCreated] = useState(false)
+  const [total, setTotal] = useState(0)
+  const failedRef = useRef(false)
+  const [stripe, setStripe] = useState<any>(null)
+  const [elements, setElements] = useState<any>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [isStripeLoading, setIsStripeLoading] = useState(true)
 
-  // 1. Set addresses/rate from sessionStorage ONCE
+  // Load stored data from session storage
   useEffect(() => {
-    const storedShippingAddress = sessionStorage.getItem('shippingAddress')
-    const storedBillingAddress = sessionStorage.getItem('billingAddress')
-    const storedShippingRate = sessionStorage.getItem('shippingRate')
-
-    if (!storedShippingAddress || !storedBillingAddress || !storedShippingRate) {
-      router.push('/checkout/shipping')
-      return
-    }
-
-    setShippingAddress(JSON.parse(storedShippingAddress))
-    setBillingAddress(JSON.parse(storedBillingAddress))
-    setShippingRate(JSON.parse(storedShippingRate))
-  }, [])
-
-  // 2. Create payment intent when all required data is present
-  useEffect(() => {
-    if (
-      status === 'loading' ||
-      cartLoading ||
-      !items.length ||
-      !cartTotal || cartTotal <= 0 ||
-      !shippingAddress || !billingAddress || !shippingRate
-    ) return
-
-    const createPaymentIntent = async () => {
+    const loadStoredData = async () => {
       try {
-        const response = await fetch('/api/orders', {
+        const storedShippingAddress = safeSessionStorage.get('checkout.shippingAddress');
+        const storedBillingAddress = safeSessionStorage.get('checkout.billingAddress');
+        const storedShippingRate = safeSessionStorage.get('checkout.shippingRate');
+        const storedTaxAmount = safeSessionStorage.get('checkout.taxAmount');
+        const storedTotal = safeSessionStorage.get('checkout.calculatedTotal');
+
+        if (!storedShippingAddress || !storedBillingAddress || !storedShippingRate) {
+          console.error('Missing required checkout data:', {
+            hasShippingAddress: !!storedShippingAddress,
+            hasBillingAddress: !!storedBillingAddress,
+            hasShippingRate: !!storedShippingRate,
+            hasTaxAmount: !!storedTaxAmount,
+            hasTotal: !!storedTotal
+          });
+          router.push('/checkout/shipping');
+          return;
+        }
+
+        setShippingAddress(storedShippingAddress);
+        setBillingAddress(storedBillingAddress);
+        setShippingRate(storedShippingRate);
+        setTaxAmount(storedTaxAmount || 0);
+        setTotal(storedTotal || 0);
+        setLoading(false);
+      } catch (err) {
+        console.error('Error loading stored data:', err);
+        setError('Failed to load checkout data. Please try again.');
+        setLoading(false);
+      }
+    };
+
+    loadStoredData();
+  }, [router]);
+
+  // Initialize Stripe
+  useEffect(() => {
+    const initializeStripe = async () => {
+      try {
+        if (!process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY) {
+          throw new Error('Stripe publishable key is not configured');
+        }
+
+        const stripeInstance = await stripePromise;
+        if (!stripeInstance) {
+          throw new Error('Failed to initialize Stripe');
+        }
+
+        setStripe(stripeInstance);
+        setIsStripeLoading(false);
+      } catch (err) {
+        console.error('Error initializing Stripe:', err);
+        setError('Failed to initialize payment system. Please try again.');
+        setIsStripeLoading(false);
+      }
+    };
+
+    initializeStripe();
+  }, []);
+
+  // Initialize payment
+  useEffect(() => {
+    const initializePayment = async () => {
+      if (loading || isStripeLoading || !stripe || !total || total <= 0) {
+        return;
+      }
+
+      try {
+        setCreatingPaymentIntent(true);
+        setError(null);
+
+        const response = await fetch('/api/create-payment-intent', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify({
-            items,
+            amount: total,
+            items: items.map(item => ({
+              id: item.id,
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              variantId: item.variantId || null
+            })),
             shippingAddress,
             billingAddress,
             shippingRate,
-            total: cartTotal + shippingRate.rate
+            taxAmount
           }),
-        })
+        });
 
         if (!response.ok) {
-          const errorData = await response.json()
-          throw new Error(errorData.message || 'Failed to create payment intent')
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to create payment intent');
         }
 
-        const data = await response.json()
-        if (!data.clientSecret || !data.orderId) {
-          setError('No payment intent or order ID returned from server.')
-          return
-        }
-        setClientSecret(data.clientSecret)
-        setOrderId(data.orderId)
-      } catch (err: any) {
-        setError(err.message || 'Failed to initialize payment. Please try again.')
+        const data = await response.json();
+        setClientSecret(data.clientSecret);
+        setOrderId(data.orderId);
+        setPaymentIntentCreated(true);
+      } catch (err) {
+        console.error('Payment initialization error:', err);
+        setError(err instanceof Error ? err.message : 'Failed to initialize payment');
+        failedRef.current = true;
+      } finally {
+        setCreatingPaymentIntent(false);
       }
-    }
+    };
 
-    createPaymentIntent()
-  }, [items, cartTotal, status, cartLoading, shippingAddress, billingAddress, shippingRate])
+    initializePayment();
+  }, [loading, isStripeLoading, stripe, total, items, shippingAddress, billingAddress, shippingRate, taxAmount]);
 
-  // Defensive guard: if any required address/rate is missing, redirect
-  if (!shippingAddress || !billingAddress || !shippingRate) {
-    if (typeof window !== 'undefined') {
-      router.push('/checkout/shipping')
-    }
-    return null
+  if (loading || isStripeLoading || creatingPaymentIntent) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    );
   }
 
   if (error) {
     return (
-      <div className="max-w-4xl mx-auto p-6">
-        <Alert variant="destructive" className="mb-6">
+      <div className="container mx-auto px-4 py-8">
+        <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
-        <div className="flex gap-4">
-          <Button onClick={() => window.location.reload()}>Try Again</Button>
-          <Button onClick={() => router.push('/cart')} variant="outline">Back to Cart</Button>
-        </div>
+        <Button
+          onClick={() => router.push('/checkout/shipping')}
+          className="mt-4"
+        >
+          Return to Shipping
+        </Button>
       </div>
-    )
+    );
   }
 
-  if (
-    status === 'loading' ||
-    cartLoading ||
-    !items.length ||
-    !cartTotal || cartTotal <= 0
-  ) {
+  if (!clientSecret || !stripe) {
     return (
-      <div className="max-w-4xl mx-auto p-6 flex flex-col items-center justify-center">
-        <Loader2 className="animate-spin h-8 w-8 text-gray-500 mb-4" />
-        <div className="text-center">
-          <h2 className="text-xl font-semibold mb-4">Loading payment information...</h2>
-          <p className="text-gray-600">Please wait while we prepare your payment details.</p>
-        </div>
+      <div className="container mx-auto px-4 py-8">
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Payment System Not Ready</AlertTitle>
+          <AlertDescription>
+            Please wait while we initialize the payment system...
+          </AlertDescription>
+        </Alert>
       </div>
-    )
+    );
   }
+
+  const options: StripeElementsOptions = {
+    clientSecret,
+    appearance,
+  };
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-8">Payment Information</h1>
-
-      <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-        {/* Payment Form */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Payment Details</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Elements stripe={stripePromise} options={{ clientSecret: clientSecret || undefined }}>
-              <CheckoutForm
-                clientSecret={clientSecret || undefined}
-                items={items}
-                orderId={orderId || undefined}
-                onPaying={setPaying}
-                onSuccess={() => {
-                  // Clear session storage after successful payment
-                  sessionStorage.removeItem('shippingAddress')
-                  sessionStorage.removeItem('billingAddress')
-                  sessionStorage.removeItem('shippingRate')
-                }}
-              />
-              {paying && (
-                <div className="flex items-center mt-4 text-indigo-600">
-                  <Loader2 className="animate-spin h-5 w-5 mr-2" />
-                  Processing payment...
-                </div>
-              )}
-            </Elements>
-          </CardContent>
-        </Card>
-
-        {/* Order Summary */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Order Summary</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {items.map((item) => (
-                <div key={item.id} className="flex justify-between">
-                  <div>
-                    <p className="font-medium">{item.name}</p>
-                    <p className="text-sm text-gray-500">Quantity: {item.quantity}</p>
-                  </div>
-                  <p className="font-medium">${(item.price * item.quantity).toFixed(2)}</p>
-                </div>
-              ))}
-              <div className="border-t pt-4">
-                <div className="flex justify-between mb-2">
-                  <p>Subtotal</p>
-                  <p>${cartTotal.toFixed(2)}</p>
-                </div>
-                <div className="flex justify-between mb-2">
-                  <p>Shipping ({shippingRate.name})</p>
-                  <p>${shippingRate.rate.toFixed(2)}</p>
-                </div>
-                <div className="flex justify-between font-bold">
-                  <p>Total</p>
-                  <p>${(cartTotal + shippingRate.rate).toFixed(2)}</p>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+    <div className="container mx-auto px-4 py-8">
+      <Card>
+        <CardHeader>
+          <CardTitle>Payment Details</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Elements stripe={stripe} options={options}>
+            <PaymentForm />
+          </Elements>
+        </CardContent>
+      </Card>
     </div>
-  )
+  );
 } 

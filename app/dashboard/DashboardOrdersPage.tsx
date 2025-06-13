@@ -42,6 +42,7 @@ interface Order {
     country?: string
     phone?: string
   }
+  paymentIntentId?: string
 }
 
 interface OrdersResponse {
@@ -78,31 +79,41 @@ function OrdersContent() {
   useEffect(() => {
     const fetchOrders = async () => {
       try {
+        setLoading(true);
+        setError(null);
         const params = new URLSearchParams({
           page: currentPage.toString(),
           ...(search && { search }),
           ...(status && { status }),
           ...(sortBy && { sortBy }),
-        })
+        });
 
-        const response = await fetch(`/api/orders?${params}`)
+        const response = await fetch(`/api/orders?${params}`);
         if (!response.ok) {
-          throw new Error("Failed to fetch orders")
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to fetch orders');
         }
-        const data: OrdersResponse = await response.json()
-        setOrders(data.orders)
-        setTotalPages(data.totalPages)
-        setCurrentPage(data.currentPage)
-        setTotalItems(data.totalItems)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "An error occurred")
-      } finally {
-        setLoading(false)
-      }
-    }
+        const data: OrdersResponse = await response.json();
+        
+        // Validate the response data
+        if (!data || !Array.isArray(data.orders)) {
+          throw new Error('Invalid response format');
+        }
 
-    fetchOrders()
-  }, [currentPage, search, status, sortBy])
+        setOrders(data.orders);
+        setTotalPages(data.totalPages || 1);
+        setCurrentPage(data.currentPage || 1);
+        setTotalItems(data.totalItems || 0);
+      } catch (err) {
+        console.error('Error fetching orders:', err);
+        setError(err instanceof Error ? err.message : 'An error occurred while fetching orders');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchOrders();
+  }, [currentPage, search, status, sortBy]);
 
   const handleStatusChange = async (orderId: string, newStatus: string) => {
     try {
@@ -226,6 +237,7 @@ function OrdersContent() {
             <option value="">All Statuses</option>
             <option value="PENDING">Pending</option>
             <option value="PAID">Paid</option>
+            <option value="PROCESSING">Processing</option>
             <option value="SHIPPED">Shipped</option>
             <option value="DELIVERED">Delivered</option>
             <option value="CANCELLED">Cancelled</option>
@@ -274,75 +286,63 @@ function OrdersContent() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 bg-white">
-                  {orders.map((order) => (
-                    order && order.user ? (
+                  {orders.map((order) => {
+                    if (!order) return null;
+                    
+                    return (
                       <tr key={order.id}>
                         <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">
                           {order.id}
                         </td>
                         <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                          <div>{order.user.name}</div>
-                          <div className="text-gray-400">{order.user.email}</div>
+                          {order.user ? (
+                            <>
+                              <div>{order.user.name || 'Unknown'}</div>
+                              <div className="text-gray-400">{order.user.email || 'No email'}</div>
+                            </>
+                          ) : (
+                            <>
+                              <div>Guest</div>
+                              <div className="text-gray-400">
+                                {order.shippingAddress?.email || order.billingAddress?.email || 'No email'}
+                              </div>
+                            </>
+                          )}
                         </td>
                         <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                           <select
-                            value={order.status}
+                            value={order.status || 'PENDING'}
                             onChange={(e) => handleStatusChange(order.id, e.target.value)}
                             className="rounded-md border-gray-300 text-sm text-gray-900 bg-white focus:border-indigo-500 focus:ring-indigo-500"
                           >
                             <option value="PENDING">Pending</option>
                             <option value="PAID">Paid</option>
+                            <option value="PROCESSING">Processing</option>
                             <option value="SHIPPED">Shipped</option>
                             <option value="DELIVERED">Delivered</option>
                             <option value="CANCELLED">Cancelled</option>
                           </select>
                         </td>
                         <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                          ${Number(order.total).toFixed(2)}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                          {new Date(order.createdAt).toLocaleString()}
-                        </td>
-                        <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
-                          <Link
-                            href={`/dashboard/orders/${order.id}`}
-                            className="text-indigo-600 hover:text-indigo-900"
-                          >
-                            View Details
-                          </Link>
-                        </td>
-                      </tr>
-                    ) : order ? (
-                      <tr key={typeof order === 'object' && order && 'id' in order ? (order as any).id : `missing-${Math.random()}`}>
-                        <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">
-                          {order.id}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                          <div>Guest</div>
-                          <div className="text-gray-400">
-                            {('email' in (order.shippingAddress || {})) && order.shippingAddress?.email ? order.shippingAddress.email :
-                              ('email' in (order.billingAddress || {})) && order.billingAddress?.email ? order.billingAddress.email :
-                              'No email'}
+                          <div className="flex flex-col gap-1">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium ${
+                              order.paymentIntentId && ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(order.status)
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                            }`}>
+                              {order.paymentIntentId && ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(order.status)
+                                ? 'Paid'
+                                : 'Pending'}
+                            </span>
+                            {order.paymentIntentId && (
+                              <span className="text-xs text-gray-500">
+                                ID: {order.paymentIntentId.slice(0, 8)}...
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                          <select
-                            value={order.status}
-                            onChange={(e) => handleStatusChange(order.id, e.target.value)}
-                            className="rounded-md border-gray-300 text-sm text-gray-900 bg-white focus:border-indigo-500 focus:ring-indigo-500"
-                          >
-                            <option value="PENDING">Pending</option>
-                            <option value="PAID">Paid</option>
-                            <option value="SHIPPED">Shipped</option>
-                            <option value="DELIVERED">Delivered</option>
-                            <option value="CANCELLED">Cancelled</option>
-                          </select>
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                          ${Number(order.total).toFixed(2)}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                          {new Date(order.createdAt).toLocaleString()}
+                          {order.createdAt ? new Date(order.createdAt).toLocaleString() : 'N/A'}
                         </td>
                         <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
                           <Link
@@ -353,12 +353,8 @@ function OrdersContent() {
                           </Link>
                         </td>
                       </tr>
-                    ) : (
-                      <tr key={typeof order === 'object' && order && 'id' in order ? (order as any).id : `missing-${Math.random()}`}>
-                        <td colSpan={6} className="text-center text-red-500">Order data missing</td>
-                      </tr>
-                    )
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

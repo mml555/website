@@ -17,6 +17,16 @@ interface Category {
   description?: string
 }
 
+// Helper function to convert any numeric type to number
+const toNumber = (val: unknown): number => {
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') return parseFloat(val);
+  if (val && typeof val === 'object' && 'toNumber' in val) {
+    return (val as { toNumber(): number }).toNumber();
+  }
+  return 0;
+};
+
 // Zod schemas
 const CategorySchema = z.object({
   id: z.string(),
@@ -28,46 +38,47 @@ const ProductSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string(),
-  price: z.number(),
-  stock: z.number(),
-  images: z.array(z.string()),
+  price: z.any().transform(toNumber),
+  stock: z.any().transform(toNumber),
+  images: z.array(z.string()).default([]),
   categoryId: z.string().nullable(),
   sku: z.string().nullable(),
-  featured: z.boolean(),
-  isActive: z.boolean(),
+  featured: z.boolean().default(false),
+  isActive: z.boolean().default(true),
   category: z.object({ 
     id: z.string(), 
     name: z.string() 
   }).nullable(),
-  weight: z.number().nullable(),
+  weight: z.any().transform(toNumber).nullable(),
   variants: z.array(z.object({
     id: z.string(),
     name: z.string(),
-    price: z.number(),
-    stock: z.number()
+    price: z.any().transform(toNumber),
+    stock: z.any().transform(toNumber),
+    type: z.string().optional()
   })).optional(),
   tags: z.array(z.string()).optional(),
   rating: z.number().optional(),
   reviews: z.number().optional(),
   brand: z.string().optional(),
   dimensions: z.object({
-    length: z.number(),
-    width: z.number(),
-    height: z.number()
+    length: z.any().transform(toNumber),
+    width: z.any().transform(toNumber),
+    height: z.any().transform(toNumber)
   }).optional(),
   shipping: z.object({
-    weight: z.number(),
+    weight: z.any().transform(toNumber),
     dimensions: z.object({
-      length: z.number(),
-      width: z.number(),
-      height: z.number()
+      length: z.any().transform(toNumber),
+      width: z.any().transform(toNumber),
+      height: z.any().transform(toNumber)
     }),
-    freeShipping: z.boolean()
+    freeShipping: z.boolean().default(false)
   }).optional(),
   metadata: z.record(z.string()).optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional()
-});
+}).passthrough(); // Allow additional properties
 const ProductArraySchema = z.array(ProductSchema);
 
 export default function StorefrontProductsPage() {
@@ -188,15 +199,30 @@ export default function StorefrontProductsPage() {
               message: err.message,
               code: err.code
             })),
-            receivedData: data.products.map((p: any) => ({
-              id: p.id,
-              name: p.name,
-              price: p.price,
-              stock: p.stock,
-              image: p.image,
-              category: p.category,
-              weight: p.weight
-            }))
+            sampleProduct: data.products[0] ? {
+              id: data.products[0].id,
+              name: data.products[0].name,
+              description: data.products[0].description,
+              price: data.products[0].price,
+              stock: data.products[0].stock,
+              images: data.products[0].images,
+              categoryId: data.products[0].categoryId,
+              sku: data.products[0].sku,
+              featured: data.products[0].featured,
+              isActive: data.products[0].isActive,
+              category: data.products[0].category,
+              weight: data.products[0].weight,
+              variants: data.products[0].variants,
+              tags: data.products[0].tags,
+              rating: data.products[0].rating,
+              reviews: data.products[0].reviews,
+              brand: data.products[0].brand,
+              dimensions: data.products[0].dimensions,
+              shipping: data.products[0].shipping,
+              metadata: data.products[0].metadata,
+              createdAt: data.products[0].createdAt,
+              updatedAt: data.products[0].updatedAt
+            } : null
           })
           throw new Error('Invalid products data received: schema validation failed')
         }
@@ -249,17 +275,8 @@ export default function StorefrontProductsPage() {
     try {
       setAddingToCart(product.id)
       setError(null)
-      
-      // Validate product data
-      if (!product.id || !product.name) {
-        throw new Error("Invalid product data")
-      }
 
-      const price = typeof product.price === 'string' ? parseFloat(product.price) : product.price
-      if (isNaN(price)) {
-        throw new Error("Invalid price format")
-      }
-
+      const price = validatePrice(product.price)
       const quantity = quantities[product.id] || 1
       if (quantity > (product.stock ?? Infinity)) {
         throw new Error("Not enough stock available")
@@ -267,10 +284,17 @@ export default function StorefrontProductsPage() {
 
       await addItem({
         productId: product.id,
-        name: product.name,
+        quantity,
         price,
-        image: product.images[0] || "",
-      }, quantity)
+        originalPrice: price, // Set original price to initial price
+        product: {
+          id: product.id,
+          name: product.name,
+          price,
+          images: product.images,
+          stock: product.stock
+        }
+      })
       setToast(`${product.name} added to cart!`)
       setTimeout(() => setToast(null), 2500)
 

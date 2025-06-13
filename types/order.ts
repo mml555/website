@@ -3,30 +3,48 @@ export interface Order {
   orderNumber: string;
   status: string;
   total: number;
-  subtotal: number;
   tax: number;
+  shippingRate: number;
   items: OrderItem[];
   shippingAddress: Address;
   billingAddress: Address;
-  shippingMethod: ShippingMethod;
   createdAt: string;
+  updatedAt: string;
+  userId?: string | null;
+  customerEmail?: string | null;
+  stripeSessionId?: string | null;
+  paymentIntentId?: string | null;
 }
 
 export interface OrderItem {
   id: string;
-  name: string;
-  price: number;
+  orderId: string;
+  productId: string;
   quantity: number;
-  image?: string;
+  price: number;
+  variantId?: string | null;
+  product: {
+    id: string;
+    name: string;
+    description: string;
+    price: number;
+    images: string[];
+  };
 }
 
 export interface Address {
+  id: string;
+  orderId: string;
   name: string;
+  email: string;
+  phone: string;
   street: string;
   city: string;
   state: string;
   postalCode: string;
   country: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ShippingMethod {

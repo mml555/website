@@ -1,14 +1,25 @@
-import type { Order, OrderItem, Address, ShippingMethod } from '@/types/order';
+import type { Order } from '@/types/order';
 import { prisma } from '@/lib/prisma';
+import { logger } from '@/lib/logger';
 
 export async function getOrder(orderId: string): Promise<Order | null> {
   try {
+    logger.info('Fetching order:', { orderId });
+    
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: {
         items: {
           include: {
-            product: true,
+            product: {
+              select: {
+                id: true,
+                name: true,
+                description: true,
+                price: true,
+                images: true,
+              }
+            },
             variant: true,
           },
         },
@@ -18,76 +29,51 @@ export async function getOrder(orderId: string): Promise<Order | null> {
     });
 
     if (!order) {
+      logger.info('Order not found:', { orderId });
       return null;
     }
 
-    // Calculate subtotal and tax
-    const subtotal = order.items.reduce((sum, item) => {
-      return sum + (Number(item.price) * item.quantity);
-    }, 0);
-
-    const tax = subtotal * 0.0825; // 8.25% tax rate
-
-    const shippingMethod: ShippingMethod = {
-      id: 'standard',
-      name: 'Standard Shipping',
-      price: 0, // Default shipping rate
-    };
-
-    const items: OrderItem[] = order.items.map(item => ({
-      id: item.id,
-      name: item.product.name,
-      price: Number(item.price),
-      quantity: item.quantity,
-    }));
-
-    const shippingAddress: Address = order.shippingAddress ? {
-      name: order.customerEmail || '',
-      street: order.shippingAddress.street,
-      city: order.shippingAddress.city,
-      state: order.shippingAddress.state,
-      postalCode: order.shippingAddress.postalCode,
-      country: order.shippingAddress.country,
-    } : {
-      name: '',
-      street: '',
-      city: '',
-      state: '',
-      postalCode: '',
-      country: 'US',
-    };
-
-    const billingAddress: Address = order.billingAddress ? {
-      name: order.billingAddress.name,
-      street: order.billingAddress.address,
-      city: order.billingAddress.city,
-      state: order.billingAddress.state,
-      postalCode: order.billingAddress.zipCode,
-      country: order.billingAddress.country || 'US',
-    } : {
-      name: '',
-      street: '',
-      city: '',
-      state: '',
-      postalCode: '',
-      country: 'US',
-    };
+    logger.info('Found order:', {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      status: order.status,
+      total: order.total,
+      itemsCount: order.items.length
+    });
 
     return {
       id: order.id,
       orderNumber: order.orderNumber,
       status: order.status,
       total: Number(order.total),
-      subtotal,
-      tax,
-      items,
-      shippingAddress,
-      billingAddress,
-      shippingMethod,
+      tax: Number(order.tax),
+      shippingRate: Number(order.shippingRate),
+      items: order.items.map(item => ({
+        id: item.id,
+        orderId: item.orderId,
+        productId: item.productId,
+        quantity: item.quantity,
+        price: Number(item.price),
+        variantId: item.variantId,
+        product: {
+          id: item.product.id,
+          name: item.product.name,
+          description: item.product.description,
+          price: Number(item.product.price),
+          images: item.product.images as string[],
+        }
+      })),
+      shippingAddress: order.shippingAddress,
+      billingAddress: order.billingAddress,
       createdAt: order.createdAt.toISOString(),
+      updatedAt: order.updatedAt.toISOString(),
+      userId: order.userId,
+      customerEmail: order.customerEmail,
+      stripeSessionId: order.stripeSessionId,
+      paymentIntentId: order.paymentIntentId,
     };
   } catch (error) {
-    console.error('Error getting order:', error);
+    logger.error('Error getting order:', { error, orderId });
     return null;
   }
 } 

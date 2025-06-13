@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
-import { rateLimit } from '@/lib/rate-limit'
+import { rateLimit } from '@/lib/rate-limiter'
 import redis, { getJsonFromRedis } from '@/lib/redis'
 import { Decimal } from '@prisma/client/runtime/library'
+import { RateLimiter } from '@/lib/rate-limiter'
 
 // Cache configuration
 const CACHE_DURATION = 30; // 30 seconds
@@ -34,7 +35,7 @@ async function setCachedData(key: string, data: any, ttl: number = CACHE_DURATIO
       console.warn('Redis not initialized, skipping cache write')
       return
     }
-    await redis.set(key, JSON.stringify(data), { ex: ttl })
+    await redis.set(key, JSON.stringify(data), 'EX', ttl);
   } catch (error) {
     console.warn('Cache write error:', error)
   }
@@ -89,13 +90,13 @@ function convertDecimalToNumber(value: Decimal | null): number {
 export async function GET(request: NextRequest) {
   try {
     // Rate limiting
-    const limiter = rateLimit({
-      interval: 60 * 1000, // 1 minute
-      uniqueTokenPerInterval: 500
-    });
-    
-    const ip = request.headers.get('x-forwarded-for') || 'anonymous';
-    await limiter.check(30, ip); // 30 requests per minute
+    const isAllowed = await rateLimit(request, 10, 60);
+    if (!isAllowed) {
+      return NextResponse.json(
+        { error: 'Too many requests' },
+        { status: 429 }
+      );
+    }
 
     const { searchParams } = new URL(request.url)
     const params = Object.fromEntries(searchParams.entries())

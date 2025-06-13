@@ -50,6 +50,10 @@ const nextConfig = {
       {
         protocol: 'https',
         hostname: 'placeholdit.imgix.net',
+      },
+      {
+        protocol: 'https',
+        hostname: 'example.com',
       }
     ],
     formats: ['image/avif', 'image/webp'],
@@ -58,6 +62,7 @@ const nextConfig = {
     minimumCacheTTL: 60,
     dangerouslyAllowSVG: true,
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
+    domains: ['example.com', 'localhost'],
   },
   // Server external packages (moved from experimental)
   serverExternalPackages: ['@prisma/client', 'bcryptjs'],
@@ -65,6 +70,7 @@ const nextConfig = {
   experimental: {
     optimizeCss: true,
     scrollRestoration: true,
+    serverActions: true,
   },
   // Compiler options
   compiler: {
@@ -151,20 +157,41 @@ const nextConfig = {
       }
     }
 
-    // Removed polling for local development to prevent excessive recompiles and improve performance
-    // if (!isServer) {
-    //   config.watchOptions = {
-    //     ...config.watchOptions,
-    //     poll: 1000,
-    //     aggregateTimeout: 300,
-    //   };
-    //   config.resolve.fallback = {
-    //     ...config.resolve.fallback,
-    //     fs: false,
-    //     net: false,
-    //     tls: false,
-    //   };
-    // }
+    // Handle Node.js built-in modules
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        net: false,
+        tls: false,
+        async_hooks: false,
+        events: false,
+        path: false,
+        crypto: false,
+        stream: false,
+        util: false,
+        buffer: false,
+        process: false,
+        os: false,
+        zlib: false,
+        http: false,
+        https: false,
+        url: false,
+        querystring: false,
+        child_process: false,
+        dns: false,
+        dgram: false,
+        module: false,
+        assert: false,
+        constants: false,
+        domain: false,
+        punycode: false,
+        string_decoder: false,
+        timers: false,
+        tty: false,
+        vm: false,
+      };
+    }
 
     // Handle OpenTelemetry instrumentation warnings
     config.module.rules.push({
@@ -197,12 +224,6 @@ const nextConfig = {
         test: new RegExp(`node_modules/@opentelemetry/instrumentation-${module}/`),
         use: 'ignore-loader'
       });
-    });
-
-    // Ignore require-in-the-middle warnings
-    config.module.rules.push({
-      test: /node_modules\/require-in-the-middle/,
-      use: 'ignore-loader'
     });
 
     return config

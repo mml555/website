@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic'
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import RegisterForm from 'components/auth/RegisterForm'
+import RegisterForm from '../../components/auth/RegisterForm'
 
 export default function RegisterPage() {
   const [name, setName] = useState("")

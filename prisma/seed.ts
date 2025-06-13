@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client'
 import crypto from 'crypto'
 import { faker } from '@faker-js/faker'
+import { hash } from 'bcryptjs'
 
 const prisma = new PrismaClient()
 const FALLBACK_IMAGE = 'https://picsum.photos/seed/default/400/400'
@@ -11,6 +12,134 @@ function hashPassword(password: string): string {
 }
 
 async function main() {
+  // Create test categories
+  const categories = await Promise.all([
+    prisma.category.create({
+      data: {
+        name: 'Electronics',
+        description: 'Electronic devices and accessories'
+      }
+    }),
+    prisma.category.create({
+      data: {
+        name: 'Clothing',
+        description: 'Apparel and fashion items'
+      }
+    }),
+    prisma.category.create({
+      data: {
+        name: 'Home & Garden',
+        description: 'Home decor and garden supplies'
+      }
+    })
+  ])
+
+  // Create test products
+  const products = await Promise.all([
+    // Electronics
+    prisma.product.create({
+      data: {
+        name: 'Wireless Headphones',
+        description: 'High-quality wireless headphones with noise cancellation',
+        price: 199.99,
+        stock: 50,
+        images: ['https://picsum.photos/400/400'],
+        categoryId: categories[0].id,
+        sku: 'WH-001',
+        isActive: true,
+        featured: true,
+        weight: 0.5
+      }
+    }),
+    prisma.product.create({
+      data: {
+        name: 'Smart Watch',
+        description: 'Feature-rich smartwatch with health tracking',
+        price: 299.99,
+        stock: 30,
+        images: ['https://picsum.photos/400/400'],
+        categoryId: categories[0].id,
+        sku: 'SW-001',
+        isActive: true,
+        featured: true,
+        weight: 0.3
+      }
+    }),
+    // Clothing
+    prisma.product.create({
+      data: {
+        name: 'Cotton T-Shirt',
+        description: 'Comfortable cotton t-shirt for everyday wear',
+        price: 29.99,
+        stock: 100,
+        images: ['https://picsum.photos/400/400'],
+        categoryId: categories[1].id,
+        sku: 'TS-001',
+        isActive: true,
+        featured: false,
+        weight: 0.2
+      }
+    }),
+    prisma.product.create({
+      data: {
+        name: 'Denim Jeans',
+        description: 'Classic denim jeans with modern fit',
+        price: 79.99,
+        stock: 75,
+        images: ['https://picsum.photos/400/400'],
+        categoryId: categories[1].id,
+        sku: 'DJ-001',
+        isActive: true,
+        featured: true,
+        weight: 0.8
+      }
+    }),
+    // Home & Garden
+    prisma.product.create({
+      data: {
+        name: 'Indoor Plant',
+        description: 'Beautiful indoor plant for home decoration',
+        price: 39.99,
+        stock: 40,
+        images: ['https://picsum.photos/400/400'],
+        categoryId: categories[2].id,
+        sku: 'IP-001',
+        isActive: true,
+        featured: false,
+        weight: 1.5
+      }
+    }),
+    prisma.product.create({
+      data: {
+        name: 'Garden Tools Set',
+        description: 'Complete set of essential garden tools',
+        price: 89.99,
+        stock: 25,
+        images: ['https://picsum.photos/400/400'],
+        categoryId: categories[2].id,
+        sku: 'GT-001',
+        isActive: true,
+        featured: true,
+        weight: 2.0
+      }
+    })
+  ])
+
+  // Create test admin user
+  const adminPassword = await hash('admin123', 12)
+  await prisma.user.create({
+    data: {
+      email: 'admin@example.com',
+      name: 'Admin User',
+      password: adminPassword,
+      role: 'ADMIN'
+    }
+  })
+
+  console.log('Seed data created successfully!')
+  console.log('Categories:', categories.length)
+  console.log('Products:', products.length)
+
   // Create a real user
   const user = await prisma.user.upsert({
     where: { email: 'customer@example.com' },
@@ -40,7 +169,7 @@ async function main() {
       data: {
         name: `Sample Product ${i}`,
         description: `This is the description for Sample Product ${i}.`,
-        price: Math.floor(Math.random() * 10000) / 100,
+        price: Math.floor(Math.random() * 10000) / 100, // Random price between 0 and 100
         stock: Math.floor(Math.random() * 100) + 1, // Random stock between 1 and 100
         categoryId: category.id,
         images: [imageUrl],
@@ -56,28 +185,45 @@ async function main() {
 
   // Create orders for the real user
   for (let i = 0; i < 3; i++) {
-    await prisma.order.create({
+    const order = await prisma.order.create({
       data: {
-        orderNumber: `SEED-${Date.now()}-${i}`,
-        userId: user.id,
         status: 'PENDING',
-        total: product.price,
-        items: {
-          create: [{
-            productId: product.id,
-            quantity: 1,
-            price: product.price,
-          }],
-        },
+        total: 99.99,
+        orderNumber: `ORDER-${i}`,
         shippingAddress: {
           create: {
-            street: faker.location.streetAddress(),
-            city: faker.location.city(),
-            state: faker.location.state(),
-            postalCode: faker.location.zipCode(),
-            country: faker.location.country(),
-          },
+            name: 'John Doe',
+            email: 'john@example.com',
+            street: '123 Main St',
+            city: 'New York',
+            state: 'NY',
+            postalCode: '10001',
+            country: 'USA',
+            phone: '123-456-7890'
+          }
         },
+        billingAddress: {
+          create: {
+            name: 'John Doe',
+            email: 'john@example.com',
+            street: '123 Main St',
+            city: 'New York',
+            state: 'NY',
+            postalCode: '10001',
+            country: 'USA',
+            phone: '123-456-7890'
+          }
+        }
+      },
+    })
+
+    // Create order items after order is created
+    await prisma.orderItem.create({
+      data: {
+        orderId: order.id,
+        productId: product.id,
+        quantity: 1,
+        price: product.price,
       },
     })
   }
@@ -97,8 +243,8 @@ async function main() {
   console.log('Guest user created:', guestUser)
 
   // Backfill images field for all products
-  const products = await prisma.product.findMany()
-  for (const product of products) {
+  const productsToUpdate = await prisma.product.findMany()
+  for (const product of productsToUpdate) {
     let newImages: string[] = []
     if (Array.isArray(product.images) && product.images.length > 0) {
       newImages = product.images.filter((img: string) => typeof img === 'string' && img.length > 0)

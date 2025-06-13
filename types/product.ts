@@ -57,36 +57,55 @@ export interface CartItem {
   productId: string;
   variantId?: string;
   name: string;
-  price: number;
+  price: number;           // Current price of the item
+  originalPrice: number;   // Price when item was added to cart
   image: string;
   quantity: number;
   stock?: number;
   stockAtAdd?: number;
   metadata?: Record<string, any>;
+ 
+  product?: {
+    id: string;
+    name: string;
+    price: number;
+    images: string[];
+    stock: number;
+    [key: string]: any;
+  };
+
+  variant?: {
+    id: string;
+    name: string;
+    price: number | null;
+    stock: number | null;
+    image?: string;
+  } | null;
 }
 
 // Type for database cart items
 export interface DbCartItem {
-  id: string
-  cartId: string
-  productId: string
-  variantId?: string | null
-  quantity: number
-  createdAt: Date
-  updatedAt: Date
+  id: string;
+  cartId: string;
+  productId: string;
+  variantId?: string | null;
+  quantity: number;
+  price: number;
+  originalPrice: number;
+  createdAt: Date;
+  updatedAt: Date;
   product: {
-    id: string
-    name: string
-    price: number
-    images: string[]
-    stock: number
-    sku: string | null
-  }
+    id: string;
+    name: string;
+    price: number;
+    images: string[];
+    stock: number;
+  };
   variant?: {
-    id: string
-    name: string
-    price: number | null
-    stock: number
-    image: string | null
-  } | null
+    id: string;
+    name: string;
+    price: number | null;
+    stock: number | null;
+    image?: string;
+  } | null;
 } 

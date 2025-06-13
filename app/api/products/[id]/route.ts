@@ -1,5 +1,10 @@
 import { z } from 'zod';
 import redis, { withRedis } from '@/lib/redis'
+import { PrismaClient } from '@prisma/client'
+import { NextResponse } from 'next/server';
+import { convertDecimalsToNumbers } from '@/lib/AppUtils';
+
+const prisma = new PrismaClient()
 
 // Define the schema for the product response
 const productResponseSchema = z.object({
@@ -55,6 +60,56 @@ async function invalidateProductAndCategoryCache() {
 // export async function PATCH(request: Request, context: any) { ... }
 // export async function DELETE(request: Request, context: any) { ... }
 
-export async function GET() {
-  return new Response(JSON.stringify({ message: 'Test OK' }), { status: 200 })
+export async function GET(
+  request: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    // Get the ID from the URL path
+    const id = params.id;
+    
+    // Try to get from cache first
+    const cached = await withRedis(async (redis) => {
+      const cachedProduct = await redis.get(`product:${id}`);
+      if (cachedProduct) {
+        return JSON.parse(cachedProduct);
+      }
+      return null;
+    }, null);
+
+    if (cached) {
+      return NextResponse.json(cached);
+    }
+
+    // If not in cache, get from database
+    const product = await prisma.product.findUnique({
+      where: { id },
+      include: {
+        category: true
+      }
+    });
+
+    if (!product) {
+      return NextResponse.json(
+        { error: 'Product not found' },
+        { status: 404 }
+      );
+    }
+
+    // Convert Decimal fields to numbers
+    const productData = convertDecimalsToNumbers(product);
+
+    // Cache the result
+    await withRedis(async (redis) => {
+      await redis.set(`product:${id}`, JSON.stringify(productData), 'EX', 3600); // Cache for 1 hour
+    }, undefined);
+
+    return NextResponse.json(productData);
+  } catch (error) {
+    console.error('Error fetching product:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch product' },
+      { status: 500 }
+    );
+  }
 } 

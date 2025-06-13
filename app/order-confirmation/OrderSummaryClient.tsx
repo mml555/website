@@ -63,7 +63,7 @@ export default function OrderSummaryClient({ order }: OrderSummaryClientProps) {
               </div>
             </div>
             <div className="mb-4">
-              <strong>Payment Status:</strong> {order.status === 'PROCESSING' || order.status === 'SHIPPED' || order.status === 'DELIVERED' ? 'Paid' : 'Pending'}
+              <strong>Payment Status:</strong> {order.status === 'PAID' || order.status === 'PROCESSING' || order.status === 'SHIPPED' || order.status === 'DELIVERED' ? 'Paid' : 'Pending'}
             </div>
             <div className="pt-4 border-t">
               <div className="flex justify-between mb-2">

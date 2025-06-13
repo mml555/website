@@ -44,24 +44,30 @@ export async function GET(request: Request) {
   try {
     // Get user session
     const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401, headers: getResponseHeaders() }
-      );
+    const userId = session?.user?.id;
+    
+    // Get or create session ID for anonymous users
+    let sessionId = request.headers.get('x-session-id');
+    if (!sessionId && !userId) {
+      sessionId = crypto.randomUUID();
     }
 
     // Check cache
-    const cacheKey = `cart:${session.user.id}`;
+    const cacheKey = userId ? `cart:${userId}` : `cart:${sessionId}`;
     const cachedCart = await getJsonFromRedis<any>(cacheKey);
     
     if (cachedCart) {
-      return NextResponse.json(cachedCart, { headers: getResponseHeaders() });
+      return NextResponse.json(cachedCart, { 
+        headers: {
+          ...getResponseHeaders(),
+          'x-session-id': sessionId || ''
+        }
+      });
     }
 
     // Get cart from database
     let cart = await prisma.cart.findFirst({
-      where: { userId: session.user.id },
+      where: userId ? { userId } : { sessionId },
       include: {
         items: {
           include: {
@@ -87,7 +93,7 @@ export async function GET(request: Request) {
     // Auto-create cart if it doesn't exist
     if (!cart) {
       cart = await prisma.cart.create({
-        data: { userId: session.user.id },
+        data: userId ? { userId } : { sessionId },
         include: {
           items: {
             include: {
@@ -119,10 +125,13 @@ export async function GET(request: Request) {
           ? item.product.variants.find((v: any) => v.id === item.variantId)
           : null;
 
+        const price = variant?.price ? decimalToNumber(variant.price) : decimalToNumber(item.product.price);
+
         return {
           ...item,
           name: item.product.name,
-          price: variant?.price ? decimalToNumber(variant.price) : decimalToNumber(item.product.price),
+          price: price,
+          originalPrice: price, // Set original price to initial price
           image: variant?.image || item.product.images[0] || '',
           stock: variant?.stock ?? item.product.stock,
           product: {
@@ -140,7 +149,7 @@ export async function GET(request: Request) {
 
     // Cache the cart with proper JSON serialization
     await withRedis(
-      (r) => r.set(cacheKey, JSON.stringify(cartWithNumberPrices), { ex: CACHE_TTL }),
+      (r) => r.set(cacheKey, JSON.stringify(cartWithNumberPrices), 'EX', CACHE_TTL),
       undefined
     );
 

@@ -1,98 +1,124 @@
-// State tax rates (as of 2024)
-const STATE_TAX_RATES: Record<string, number> = {
-  'AL': 0.04, // Alabama
-  'AK': 0.00, // Alaska (no state sales tax)
-  'AZ': 0.056, // Arizona
-  'AR': 0.065, // Arkansas
-  'CA': 0.0725, // California
-  'CO': 0.029, // Colorado
-  'CT': 0.0635, // Connecticut
-  'DE': 0.00, // Delaware (no state sales tax)
-  'FL': 0.06, // Florida
-  'GA': 0.04, // Georgia
-  'HI': 0.04, // Hawaii
-  'ID': 0.06, // Idaho
-  'IL': 0.0625, // Illinois
-  'IN': 0.07, // Indiana
-  'IA': 0.06, // Iowa
-  'KS': 0.065, // Kansas
-  'KY': 0.06, // Kentucky
-  'LA': 0.0445, // Louisiana
-  'ME': 0.055, // Maine
-  'MD': 0.06, // Maryland
-  'MA': 0.0625, // Massachusetts
-  'MI': 0.06, // Michigan
-  'MN': 0.06875, // Minnesota
-  'MS': 0.07, // Mississippi
-  'MO': 0.04225, // Missouri
-  'MT': 0.00, // Montana (no state sales tax)
-  'NE': 0.055, // Nebraska
-  'NV': 0.0685, // Nevada
-  'NH': 0.00, // New Hampshire (no state sales tax)
-  'NJ': 0.06625, // New Jersey
-  'NM': 0.05125, // New Mexico
-  'NY': 0.04, // New York
-  'NC': 0.0475, // North Carolina
-  'ND': 0.05, // North Dakota
-  'OH': 0.0575, // Ohio
-  'OK': 0.045, // Oklahoma
-  'OR': 0.00, // Oregon (no state sales tax)
-  'PA': 0.06, // Pennsylvania
-  'RI': 0.07, // Rhode Island
-  'SC': 0.06, // South Carolina
-  'SD': 0.045, // South Dakota
-  'TN': 0.07, // Tennessee
-  'TX': 0.0625, // Texas
-  'UT': 0.061, // Utah
-  'VT': 0.06, // Vermont
-  'VA': 0.053, // Virginia
-  'WA': 0.065, // Washington
-  'WV': 0.06, // West Virginia
-  'WI': 0.05, // Wisconsin
-  'WY': 0.04, // Wyoming
-  'DC': 0.06, // District of Columbia
-}
+const US_STATES = [
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+  'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+  'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+  'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+  'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+  'DC'
+] as const;
 
-export interface TaxCalculation {
+type USState = typeof US_STATES[number];
+
+export type TaxCalculation = {
   subtotal: number;
-  stateTaxRate: number;
-  stateTaxAmount: number;
-  totalTaxAmount: number;
+  tax: number;
   total: number;
-}
+  rate: number;
+};
 
-export const US_STATES = Object.keys(STATE_TAX_RATES)
+const STATE_TAX_RATES: Record<string, number> = {
+  'AL': 0.04, 'AK': 0, 'AZ': 0.056, 'AR': 0.065, 'CA': 0.0725,
+  'CO': 0.029, 'CT': 0.0635, 'DE': 0, 'FL': 0.06, 'GA': 0.04,
+  'HI': 0.04, 'ID': 0.06, 'IL': 0.0625, 'IN': 0.07, 'IA': 0.06,
+  'KS': 0.065, 'KY': 0.06, 'LA': 0.0445, 'ME': 0.055, 'MD': 0.06,
+  'MA': 0.0625, 'MI': 0.06, 'MN': 0.06875, 'MS': 0.07, 'MO': 0.04225,
+  'MT': 0, 'NE': 0.055, 'NV': 0.0685, 'NH': 0, 'NJ': 0.06625,
+  'NM': 0.05125, 'NY': 0.04, 'NC': 0.0475, 'ND': 0.05, 'OH': 0.0575,
+  'OK': 0.045, 'OR': 0, 'PA': 0.06, 'RI': 0.07, 'SC': 0.06,
+  'SD': 0.045, 'TN': 0.07, 'TX': 0.0625, 'UT': 0.061, 'VT': 0.06,
+  'VA': 0.053, 'WA': 0.065, 'WV': 0.06, 'WI': 0.05, 'WY': 0.04,
+  'DC': 0.06
+};
 
-export function isValidUSState(state: string): boolean {
-  return US_STATES.includes(state)
-}
-
-export function isValidUSAddress(address: {
-  country: string;
-  state: string;
-  postalCode: string;
-}): boolean {
-  return (
-    (address.country === 'US' || address.country === 'USA') &&
-    isValidUSState(address.state) &&
-    /^\d{5}(-\d{4})?$/.test(address.postalCode)
-  )
-}
-
-export function calculateTax(
-  subtotal: number,
-  state: string
-): TaxCalculation {
-  const stateTaxRate = STATE_TAX_RATES[state] || 0
-  const stateTaxAmount = subtotal * stateTaxRate
-  const totalTaxAmount = stateTaxAmount
-  const total = subtotal + totalTaxAmount
-
-  return {
-    subtotal,
-    stateTaxRate,
-    stateTaxAmount,
-    totalTaxAmount,
-    total
+/**
+ * Validates state code and returns any validation errors
+ */
+export function validateState(state: string): string | null {
+  if (!state) {
+    return 'State is required';
   }
+  const normalizedState = state.toUpperCase();
+  if (!US_STATES.includes(normalizedState)) {
+    return 'Invalid state code';
+  }
+  return null;
+}
+
+/**
+ * Validates amount and returns any validation errors
+ */
+export function validateAmount(amount: number): string | null {
+  if (typeof amount !== 'number' || isNaN(amount)) {
+    return 'Amount must be a number';
+  }
+  if (amount < 0) {
+    return 'Amount must be positive';
+  }
+  return null;
+}
+
+/**
+ * Calculates tax for a given amount and state
+ */
+export function calculateTax(amount: number, state: string): TaxCalculation {
+  // Validate inputs
+  const stateError = validateState(state);
+  if (stateError) {
+    throw new Error(stateError);
+  }
+
+  const amountError = validateAmount(amount);
+  if (amountError) {
+    throw new Error(amountError);
+  }
+
+  // Normalize state code
+  const normalizedState = state.toUpperCase();
+  
+  // Get tax rate for state
+  const rate = getTaxRateForState(normalizedState);
+  
+  // Calculate tax amount
+  const tax = amount * rate;
+  
+  return {
+    subtotal: amount,
+    tax,
+    total: amount + tax,
+    rate
+  };
+}
+
+function getTaxRateForState(state: string): number {
+  // Check if state is valid
+  const normalizedState = state.toUpperCase() as USState;
+  if (!US_STATES.includes(normalizedState)) {
+    return 0;
+  }
+
+  // Get tax rate for state
+  const taxRate = STATE_TAX_RATES[normalizedState];
+  if (taxRate === undefined) {
+    throw new Error(`No tax rate found for state: ${state}`);
+  }
+
+  return taxRate;
+}
+
+/**
+ * Checks if a US address is valid
+ */
+export function isValidUSAddress(address: { state: string; postalCode: string }): boolean {
+  const stateError = validateState(address.state);
+  if (stateError) {
+    return false;
+  }
+
+  // Validate US ZIP code format
+  const zipRegex = /^\d{5}(-\d{4})?$/;
+  if (!zipRegex.test(address.postalCode)) {
+    return false;
+  }
+
+  return true;
 } 

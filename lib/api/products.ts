@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import type { Product } from '@/types/product'
-import { decimalToNumber } from '@/lib/AppUtils'
+import { decimalToNumber, validatePrice } from '@/lib/AppUtils'
 
 interface DbProduct {
   id: string
@@ -58,7 +58,7 @@ export async function getProduct(id: string): Promise<Product | null> {
 
   return {
     ...dbProduct,
-    price: Number(dbProduct.price),
+    price: validatePrice(dbProduct.price),
     images,
     stock: dbProduct.stock,
     categoryId: dbProduct.categoryId,
@@ -69,7 +69,7 @@ export async function getProduct(id: string): Promise<Product | null> {
     dimensions: undefined,
     variants: dbProduct.variants.map((variant) => ({
       ...variant,
-      price: decimalToNumber(variant.price),
+      price: validatePrice(variant.price),
     })),
     createdAt: dbProduct.createdAt instanceof Date ? dbProduct.createdAt.toISOString() : dbProduct.createdAt,
     updatedAt: dbProduct.updatedAt instanceof Date ? dbProduct.updatedAt.toISOString() : dbProduct.updatedAt,

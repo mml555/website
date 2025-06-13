@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import { render, screen } from '@testing-library/react';
-import PaymentPage from '../app/checkout/CheckoutPaymentPage';
+import PaymentPage from '../app/checkout/payment/page';
 import React from 'react';
 import { CartProvider } from '../lib/cart';
 

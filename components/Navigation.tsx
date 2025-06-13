@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation"
 import Link from "next/link"
 import { useCart } from "@/lib/cart"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Dialog } from "@headlessui/react"
 import { Bars3Icon, XMarkIcon, MagnifyingGlassIcon } from "@heroicons/react/24/outline"
 import { useSession, signOut } from "next-auth/react"
@@ -26,6 +26,29 @@ export default function Navigation() {
   const { data: session, status } = useSession()
   const router = useRouter()
   const [isSearchFocused, setIsSearchFocused] = useState(false)
+  const [isMounted, setIsMounted] = useState(false)
+
+  useEffect(() => {
+    setIsMounted(true)
+  }, [])
+
+  if (!isMounted) {
+    return (
+      <div className="bg-white shadow sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex items-center">
+              <div className="h-8 w-32 bg-gray-200 rounded animate-pulse" />
+            </div>
+            <div className="flex items-center space-x-4">
+              <div className="h-8 w-8 bg-gray-200 rounded-full animate-pulse" />
+              <div className="h-8 w-8 bg-gray-200 rounded-full animate-pulse" />
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
